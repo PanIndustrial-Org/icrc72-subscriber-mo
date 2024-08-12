@@ -1,0 +1,19 @@
+{
+  "canisters": {
+    
+    "example": {
+      "main": "src/example/canister.mo",
+      "type": "motoko"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": "mops sources"
+    },
+    "replica": {
+      "subnet_type": "system"
+    }
+  },
+  "version": 1
+}

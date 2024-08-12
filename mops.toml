@@ -1,0 +1,16 @@
+dev-dependencies = { }
+
+[dependencies]
+base = "0.11.1"
+stableheapbtreemap = "1.5.0"
+star = "0.1.1"
+map = "9.0.1"
+vector = "0.4.0"
+ovs-fixed = "0.1.1"
+
+[package]
+name = "icrc72-subscriber-mo"
+version = "0.0.1"
+description = "manage subscriptions for icrc72"
+repository = "https://github.com/PanIndustrial-Org/icrc72-subscriber-mo"
+keywords = [ "pubsub" ]
