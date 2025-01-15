@@ -1,5 +1,5 @@
 import MigrationTypes "migrations/types";
-import Migration "migrations";
+import MigrationLib "migrations";
 import BTree "mo:stableheapbtreemap/BTree";
 import OrchestrationService "../../icrc72-orchestrator.mo/src/service";
 import BroadcasterService "../../icrc72-broadcaster.mo/src/service";
@@ -9,6 +9,7 @@ import Buffer "mo:base/Buffer";
 import Error "mo:base/Error";
 
 import Int "mo:base/Int";
+import Iter "mo:base/Iter";
 import Nat "mo:base/Nat";
 import Principal "mo:base/Principal";
 import Text "mo:base/Text";
@@ -17,8 +18,13 @@ import Service "service";
 
 import D "mo:base/Debug";
 import Array "mo:base/Array";
+import ClassPlusLib "../../../../ICDevs/projects/ClassPlus/src/";
+import Conversion = "mo:candy/conversion";
+import Candy = "mo:candy/types"
 
 module {
+
+  public let Migration = MigrationLib;
 
   public type State = MigrationTypes.State;
 
@@ -38,6 +44,10 @@ module {
   public type EventNotification = MigrationTypes.Current.EventNotification;
   public type InitArgs = MigrationTypes.Current.InitArgs;
   public type SubscriptionRecord = MigrationTypes.Current.SubscriptionRecord;
+  public type Stats = MigrationTypes.Current.Stats;
+  public type SubscriptionUpdateRequest = OrchestrationService.SubscriptionUpdateRequest;
+  public type SubscriptionUpdateResult = OrchestrationService.SubscriptionUpdateResult;
+  public type Value = MigrationTypes.Current.Value;
 
 
   public let BTree = MigrationTypes.Current.BTree;
@@ -64,12 +74,56 @@ module {
     return ("icrc72:subscription:subscribers:allowed:list", #Array([#Blob(Principal.toBlob(item))]));
   };
 
-  public class Subscriber(stored: ?State, canister: Principal, environment: Environment){
+  public type ClassPlus = ClassPlusLib.ClassPlus<
+    Subscriber, 
+    State,
+    InitArgs,
+    Environment>;
 
-    let debug_channel = {
+  public func ClassPlusGetter(item: ?ClassPlus) : () -> Subscriber {
+    ClassPlusLib.ClassPlusGetter<Subscriber, State, InitArgs, Environment>(item);
+  };
+
+  public func Init<system>(config : {
+    manager: ClassPlusLib.ClassPlusInitializationManager;
+    initialState: State;
+    args : ?InitArgs;
+    pullEnvironment : ?(() -> Environment);
+    onInitialize: ?(Subscriber -> async*());
+    onStorageChange : ((State) ->())
+  }) :()-> Subscriber{
+
+    D.print("Subscriber Init");
+    switch(config.pullEnvironment){
+      case(?val) {
+        D.print("pull environment has value");
+        
+      };
+      case(null) {
+        D.print("pull environment is null");
+      };
+    };  
+    ClassPlusLib.ClassPlus<system,
+      Subscriber, 
+      State,
+      InitArgs,
+      Environment>({config with constructor = Subscriber}).get;
+  };
+
+
+  public class Subscriber(stored: ?State, caller: Principal, canister: Principal, args: ?InitArgs, environment_passed: ?Environment, storageChanged: (State) -> ()){
+
+    public let debug_channel = {
       var handleNotification = true;
       var startup = true;
       var announce = true;
+    };
+
+    public let environment = switch(environment_passed){
+      case(?val) val;
+      case(null) {
+        D.trap("Environment is required");
+      };
     };
 
     var state : CurrentState = switch(stored){
@@ -82,6 +136,8 @@ module {
         foundState;
       };
     };
+
+    storageChanged(#v0_1_0(#data(state)));
 
     let self : Service.Service = actor(Principal.toText(canister));
     var defaultHandler : ?ExecutionItem = null;
@@ -102,7 +158,12 @@ module {
     //add new subscription
     public func registerSubscriptions(subscriptions: [SubscriptionRegistration]): async [OrchestrationService.SubscriptionRegisterResult] {
       debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions " # debug_show(subscriptions));
-      let result = await Orchestrator.icrc72_register_subscription(subscriptions);
+      let result = try{
+        await Orchestrator.icrc72_register_subscription(subscriptions);
+      } catch(e){
+        state.error := ?Error.message(e);
+        return [];
+      };
       var idx = 0;
       for(thisItem in result.vals()){
         switch(thisItem){
@@ -116,6 +177,7 @@ module {
           };
           case(?#Err(val)) {
             debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions error: " # debug_show(val));
+            state.error := ?debug_show(val);
             //todo: should we retry?
           };
           case(null){
@@ -169,7 +231,7 @@ module {
 
       //see https://m7sm4-2iaaa-aaaab-qabra-cai.raw.ic0.app/?tag=1234933381 for an example of why we handle things this way. This allows us to capture traps and provide notifications for errors for each individual trx.
 
-      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: icrc72_handle_notification " # debug_show(caller) # " " # debug_show(items));
+      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: icrc72_handle_notification " # debug_show(caller, canister) # " " # debug_show(items, caller));
 
       if(caller == canister and items.size()==1){
 
@@ -186,7 +248,8 @@ module {
         };
       
         let namespace = item.namespace;
-        //todo: check the order of reciept
+        
+        
 
         let handler = if(namespace == ""){
           switch(defaultHandler){
@@ -209,40 +272,29 @@ module {
 
         //note: if a non-awaited trap occurs in one of the handlers, these items will not be replayed and they will need to be recovered and replayed. todo: would it make sense to call a self awaiting function here with a future so that they all get queued up with state change?  Would they execute in the same round?
 
-        //note: there is a notification if there is a handler for awaited errors so that they can be handled.
-
-        //no need to try catch here because this is only called fro a capturable section of code later in this function
+        //note: there is a notification if there is a handler for awaited errors so that they can be handled. Sync error(traps) will be lost
+        try{
         switch(handler){
           case(#Sync(val)) {
             val<system>(item);
+            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done no trap sync: " # debug_show(namespace, item.headers));
           };
           case(#Async(val)) {
             await* val<system>(item);
+            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done no trap async : " # debug_show(namespace, item.headers));
+          };
+        };
+        } catch(e){
+          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: error in handler " # Error.message(e) # " " # debug_show(namespace, item));
+          switch(environment.handleNotificationError){
+            case(?val) val<system>(item, e);
+            case(null) {};
           };
         };
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done: " # debug_show(namespace));
+        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done past trap: " # debug_show(namespace, item.headers));
 
-        let ?#Blob(broadcasterBlob) = Map.get(headerMap, Map.thash, "broadcaster") else {
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no broadcaster found" # debug_show(item.headers));
-          return;
-        };
-
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster found " # debug_show(Principal.fromBlob(broadcasterBlob)));
-
-
-        let accumulator = switch(BTree.get(state.confirmAccumulator, Principal.compare, Principal.fromBlob(broadcasterBlob))){
-          case(null){
-            let newVector = Vector.new<Nat>();
-            ignore BTree.insert(state.confirmAccumulator, Principal.compare, Principal.fromBlob(broadcasterBlob), newVector);
-            newVector;
-          };
-          case(?val) {val};
-        };
-
-        Vector.add(accumulator, item.id);
-
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: accumulator " # debug_show(accumulator));
+        
 
         
         return;
@@ -251,6 +303,11 @@ module {
         let subscriptionsHandled = Set.new<Nat>();
 
         //todo: check that the broadcaster is valid
+        if((await* validateBroadcaster(caller)) == false){
+          //todo: may need to add an event for notifying of illegal broadcaster and adding it to a block list
+          return;
+        };
+
         label proc for(item in items.vals()){
           //we quickly hand these to our self with awaits to be able to trap errors
 
@@ -263,6 +320,55 @@ module {
           };
 
           debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: subscription found for namespace: " # item.namespace # " " # debug_show(subscriptionId));
+
+          // we add the notification to the block here as it is the first time we confirm that we've seen it and that we have a subscription for it.
+          let trxid = switch(environment.addRecord){
+            case (?addRecord) {
+              //todo: calculate value of blocks
+              let txtop = Buffer.fromIter<(Text, Value)>([("btype",#Text("72Notification")),("ts", #Nat(natNow()))].vals());
+              let tx = Buffer.fromIter<(Text, Value)>([
+                ("namespace", #Text(item.namespace) : Value) : (Text,Value),
+                ("notificationId", #Nat(item.id): Value) : (Text,Value),
+                ("eventId", #Nat(item.eventId): Value) : (Text,Value),
+                
+                ("timestamp", #Nat(item.timestamp): Value) : (Text,Value),
+                ("publisher", #Blob(Principal.toBlob(item.source)): Value) : (Text,Value),
+                
+                
+                
+              ].vals());
+
+              switch(item.headers){
+                case(?val) {
+                  if(val.size() > 0){
+                    tx.add(("headers", Conversion.CandySharedToValue(#Map(val) : Candy.CandyShared): Value): (Text,Value));
+                  };
+                };
+                case(null) {};
+              };
+
+              
+              
+              tx.add(("data", Conversion.CandySharedToValue(item.data : Candy.CandyShared): Value): (Text,Value));
+            
+              
+
+              switch(item.prevEventId){
+                case(?val) {
+                  tx.add(("prevEventId", #Nat(val)));
+                };
+                case(null) {};
+              };
+              switch(item.filter){
+                case (?filter) {
+                  tx.add(("filter", #Text(filter)));
+                };
+                case (null) {};
+              };
+              addRecord(Buffer.toArray(tx), ?Buffer.toArray(txtop));
+            };
+            case (null) 0;
+          };
 
 
           //check the order of receipt if desired
@@ -311,17 +417,31 @@ module {
 
           debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: calling handle notification " # debug_show(item));
 
-          //todo: do I need a limiter?
-          try{
-            self.icrc72_handle_notification([item]);
-          } catch(e){
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: error in self notification " # Error.message(e));
+          //todo: may need a limiter here to prevent too many in the outgoing queue.
+          self.icrc72_handle_notification([item]);
 
-            switch(environment.handleNotificationError){
-              case(?val) val<system>(item, e);
-              case(null) {};
-            };
+          //we go ahead and add the accumultor for confirmations here so that they are confirmed even if the item fails.
+          let ?#Blob(broadcasterBlob) = Map.get(headerMap, Map.thash, "broadcaster") else {
+            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no broadcaster found" # debug_show(item.headers));
+            continue proc;
           };
+
+          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster found " # debug_show(Principal.fromBlob(broadcasterBlob)));
+
+
+          let accumulator = switch(BTree.get(state.confirmAccumulator, Principal.compare, Principal.fromBlob(broadcasterBlob))){
+            case(null){
+              let newVector = Vector.new<Nat>();
+              ignore BTree.insert(state.confirmAccumulator, Principal.compare, Principal.fromBlob(broadcasterBlob), newVector);
+              newVector;
+            };
+            case(?val) {val};
+          };
+
+          Vector.add(accumulator, item.id);
+
+          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: accumulator " # debug_show(accumulator));
+          
         };
 
         debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: subscriptionsHandled before await" # debug_show(subscriptionsHandled));
@@ -415,6 +535,8 @@ module {
       let proc = BTree.toArray(state.confirmAccumulator);
       BTree.clear(state.confirmAccumulator);
       state.confirmTimer := null;
+
+      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator " # debug_show(proc));
 
       for(thisItem in proc.vals()){
 
@@ -579,7 +701,7 @@ module {
     var _isInit = false;
 
     //register subscription for the system events
-    public func initSubscriber() : async() {
+    public func initializeSubscriptions() : async() {
       
       if(_isInit == true) return;
       _isInit := true;
@@ -623,5 +745,152 @@ module {
         };
       };
     };
+
+    public func stats(): Stats {
+      return {
+        icrc72OrchestratorCanister = environment.icrc72OrchestratorCanister;
+        broadcasters = Iter.toArray(Iter.map<(Nat, Vector.Vector<Principal>), (Nat, [Principal])>(BTree.entries(state.broadcasters), func(nat:Nat, vec: Vector.Vector<Principal>) { (nat, Vector.toArray(vec)) }));
+
+        subscriptions = BTree.toArray(state.subscriptions);
+
+        validBroadcasters = switch(state.validBroadcasters) {
+          case (#list(set)) #list(Set.toArray(set));
+          case (#icrc75(item)) #icrc75(item);
+        };
+
+        confirmAccumulator = Iter.toArray(Iter.map<(Principal, Vector.Vector<Nat>), (Principal, [Nat])>(BTree.entries(state.confirmAccumulator), func(principal : Principal, vec: Vector.Vector<Nat>):(Principal, [Nat]) {(principal, Vector.toArray(vec))}));
+
+        confirmTimer = state.confirmTimer;
+
+        lastEventId = Iter.toArray(Iter.map<(Text, BTree.BTree<Nat, Nat>), (Text, [(Nat, Nat)])>(BTree.entries(state.lastEventId),func (namespace: Text, btree : BTree.BTree<Nat, Nat>):(Text, [(Nat, Nat)]){(namespace, BTree.toArray(btree))}));
+
+        backlogs = Iter.toArray(Iter.map<(Nat, BTree.BTree<Nat, EventNotification>), (Nat, [(Nat, EventNotification)])>(BTree.entries(state.backlogs), func(id: Nat, btree: BTree.BTree<Nat, EventNotification>) : (Nat, [(Nat, EventNotification)]){ (id, BTree.toArray(btree))}));
+
+        readyForSubscription = state.readyForSubscription;
+        error = state.error;
+        tt = environment.tt.getStats();
+      };
+    };
+
+    /**
+     * Update existing subscriptions.
+     *
+     * @param updates - A list of SubscriptionUpdateRequest specifying which subscriptions to update and how.
+     * @returns A list of SubscriptionUpdateResult indicating success or failure for each update.
+     */
+    public func updateSubscription(updates: [SubscriptionUpdateRequest]) : async* [SubscriptionUpdateResult] {
+        // Logging the update request
+        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription called with " # debug_show(updates.size()) # " updates");
+
+        // Attempt to notify the Orchestrator about the updates
+        let orchestratorResults: [SubscriptionUpdateResult] = try {
+            await Orchestrator.icrc72_update_subscription(updates);
+        } catch(err) {
+            // Log the error and return failure for all updates
+            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: Failed to notify Orchestrator: " # Error.message(err));
+            state.error := ?("Failed to communicate with Orchestrator: " # Error.message(err));
+            // Return a list of generic errors corresponding to each update
+            return Array.map<SubscriptionUpdateRequest, SubscriptionUpdateResult>(updates, func(_) : SubscriptionUpdateResult {
+                ?#Err(#GenericError { error_code = 0; message = "Orchestrator communication failure" });
+            });
+        };
+
+        var results = Vector.new<SubscriptionUpdateResult>();
+        let updateCount = orchestratorResults.size();
+
+        let subsUpdated = Set.new<Nat>();
+
+        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription received " # debug_show(updateCount) # " results");
+
+        if(updateCount == 0) {
+            // No updates to process
+            return Vector.toArray(results);
+        };
+
+        // Iterate over each update result
+        label proc for(idx in Iter.range(0, updateCount-1)) {
+            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription processing result " # debug_show(idx));
+            let updateResult = orchestratorResults[idx];
+            let updateRequest = updates[idx];
+
+            switch(updateResult){
+                case(?#Ok(_)) {
+                    // Successful update, apply changes to internal state
+                    switch(updateRequest.subscription){
+                        case(#id(subscriptionId)) {
+                            // Update by Subscription ID
+                            let ?sub = BTree.get(state.subscriptions, Nat.compare, subscriptionId) else {
+                                // Subscription not found
+                                Vector.add<SubscriptionUpdateResult>(results, ?#Err(#NotFound));
+                                continue proc;
+                            };
+                            
+                          
+                            Set.add(subsUpdated, Set.nhash, sub.id);
+                               
+                            // Indicate success
+                            Vector.add(results, ?#Ok(true));
+                        };
+                        case(#namespace(ns)) {
+                            // Update by Subscription Namespace
+                            let ?subscriptionId = BTree.get(state.subscriptionsByNamespace, Text.compare, ns) else {
+                                // No subscription with the given namespace
+                                Vector.add(results, ?#Err(((#NotFound))));
+                                continue proc;
+                            };
+                    
+                            let ?sub = BTree.get(state.subscriptions, Nat.compare, subscriptionId) else {
+                                // Subscription not found
+                                Vector.add(results, ?#Err(#NotFound));
+                                continue proc;
+                            };
+                          
+                            Set.add(subsUpdated, Set.nhash, sub.id);
+                                  
+                            // Indicate success
+                            Vector.add(results, ?#Ok(true));
+                               
+                        };
+                    };
+                };
+                case(?#Err(err)) {
+                    // Handle specific error returned from Orchestrator
+                    debug if(debug_channel.announce) D.print("                    SUBSCRIBER: Orchestrator returned error: " # debug_show(err));
+                    Vector.add(results, ?#Err(err));
+                };
+                case(null) {
+                    // Handle specific error returned from Orchestrator
+                    debug if(debug_channel.announce) D.print("                    SUBSCRIBER: Orchestrator returned null: ");
+                    Vector.add(results, ?#Err(#GenericError { error_code = 0; message = "Orchestrator returned null" }));
+                };
+            };
+        };
+
+        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription completed with " # debug_show(Vector.size(results)) # " results");
+
+        label lookup for(thisRecord in Set.keys(subsUpdated)){
+          let ?subscription = BTree.get(state.subscriptions, Nat.compare, thisRecord) else continue lookup;
+
+          let updatedConfig = await Orchestrator.icrc72_get_subscribers({
+            prev = null;
+            take = null;
+            filter = ?{slice= [#ByNamespace(subscription.namespace), #BySubscriber(canister)]; statistics = null}});
+
+          if(updatedConfig.size() != 1){
+            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription failed to get updated config");
+            continue lookup;
+          };
+
+          fileSubscription({
+            id = subscription.id;
+            config = updatedConfig[0].config;
+            namespace = subscription.namespace;
+          });
+          
+        };
+
+        return Vector.toArray(results);
+    };
+
   };
 }

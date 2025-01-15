@@ -137,7 +137,18 @@ module {
           remove = "icrc72:broadcaster:subscriber:broadcaster:remove";
         };
       }
-    }
+    };
+    publisher = {
+      actions = {
+        drain = "icrc72:publisher:drain";
+      };
+      sys = "icrc72:publisher:sys:";
+      broadcasters = {
+        add = "icrc72:publisher:broadcaster:add";
+        remove = "icrc72:publisher:broadcaster:remove";
+        error = "icrc72:publisher:broadcaster:error";
+      };
+    };
 
   };
 
@@ -179,11 +190,27 @@ module {
 
   public type Environment = {
     addRecord: ?(([(Text, Value)], ?[(Text,Value)]) -> Nat);
-    generateId: ?((Text, State) -> Nat);
     icrc72OrchestratorCanister : Principal;
     tt: TT.TimerTool;
     handleNotificationError: ?(<system>(EventNotification, Error) -> ());
     handleEventOrder: ?(<system>(State, Environment, Nat, EventNotification) -> Bool);
+  };
+
+  public type Stats = {
+    icrc72OrchestratorCanister: Principal;
+    broadcasters: [(Nat, [Principal])];
+    subscriptions: [(Nat, SubscriptionRecord)];
+    validBroadcasters: {
+      #list : [Principal];
+      #icrc75 : ICRC75Item;
+    };
+    confirmAccumulator: [(Principal, [Nat])];
+    confirmTimer: ?Nat;
+    lastEventId: [(Text, [(Nat, Nat)])];
+    backlogs: [(Nat, [(Nat, EventNotification)])];
+    readyForSubscription: Bool;
+    error: ?Text;
+    tt: TT.Stats;
   };
 
   ///MARK: State
