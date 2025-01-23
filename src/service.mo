@@ -55,7 +55,7 @@ module {
   };
 
   public type EventNotification = {
-      id : Nat;
+      notificationId : Nat;
       eventId : Nat;
       prevEventId : ?Nat;
       timestamp : Nat;

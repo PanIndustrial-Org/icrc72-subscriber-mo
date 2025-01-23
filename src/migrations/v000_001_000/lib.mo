@@ -23,7 +23,7 @@ module {
       var validBroadcasters = #list(Set.new<Principal>());
       subscriptions = BTree.init<Nat, v0_1_0.SubscriptionRecord>(null);
       subscriptionsByNamespace = BTree.init<Text, Nat>(null);
-      confirmAccumulator = BTree.init<Principal, Vector.Vector<Nat>>(null);
+      confirmAccumulator = BTree.init<Principal, Vector.Vector<(Nat,Nat)>>(null);
       lastEventId = BTree.init<Text, BTree.BTree<Nat, Nat>>(null); //Namespace, subscription, lastidused
       var confirmTimer = null;
       backlogs = BTree.init<Nat, BTree.BTree<Nat, v0_1_0.EventNotification>>(null);

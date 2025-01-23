@@ -7,6 +7,7 @@ import Star "mo:star/star";
 
 import Buffer "mo:base/Buffer";
 import Error "mo:base/Error";
+import Cycles "mo:base/ExperimentalCycles";
 
 import Int "mo:base/Int";
 import Iter "mo:base/Iter";
@@ -110,6 +111,29 @@ module {
       Environment>({config with constructor = Subscriber}).get;
   };
 
+  public func ReflectWithMaxStrategy(key: Text, max: Nat) : (<system>(state: CurrentState, environment: Environment, eventNotificication: EventNotification) -> Nat){
+    let strategy = func <system>(state: CurrentState, environment: Environment, eventNotificication: EventNotification) : Nat {
+      let useMax = max;
+      let headers : ICRC16Map = switch(eventNotificication.headers){
+        case(?val){val};
+        case(null) return 0;
+      };
+      let config = Map.fromIter<Text, ICRC16>(headers.vals(), Map.thash);
+      switch(Map.get<Text, ICRC16>(config, Map.thash, key)){
+        case(?#Nat(val)) {
+          if(val > useMax){
+            return useMax;
+          } else {
+            return val;
+          };
+        };
+        case(_){
+          return 0;
+        };
+      };
+    };
+  };
+
 
   public class Subscriber(stored: ?State, caller: Principal, canister: Principal, args: ?InitArgs, environment_passed: ?Environment, storageChanged: (State) -> ()){
 
@@ -119,7 +143,7 @@ module {
       var announce = true;
     };
 
-    public let environment = switch(environment_passed){
+    let environment = switch(environment_passed){
       case(?val) val;
       case(null) {
         D.trap("Environment is required");
@@ -146,9 +170,8 @@ module {
 
     private func natNow(): Nat{Int.abs(Time.now())};
 
-    public func getState() : CurrentState {
-      return state;
-    };
+    public func getState() : CurrentState {state};
+    public func getEnvironment() : Environment {environment};
 
     private func fileSubscription(item: SubscriptionRecord) : () {
       ignore BTree.insert(state.subscriptionsByNamespace, Text.compare, item.namespace, item.id);
@@ -328,7 +351,7 @@ module {
               let txtop = Buffer.fromIter<(Text, Value)>([("btype",#Text("72Notification")),("ts", #Nat(natNow()))].vals());
               let tx = Buffer.fromIter<(Text, Value)>([
                 ("namespace", #Text(item.namespace) : Value) : (Text,Value),
-                ("notificationId", #Nat(item.id): Value) : (Text,Value),
+                ("notificationId", #Nat(item.notificationId): Value) : (Text,Value),
                 ("eventId", #Nat(item.eventId): Value) : (Text,Value),
                 
                 ("timestamp", #Nat(item.timestamp): Value) : (Text,Value),
@@ -387,7 +410,7 @@ module {
                 newMap;
               };
             };
-            ignore BTree.insert<Nat, EventNotification>(backlog, Nat.compare, item.eventId, item);
+            ignore BTree.insert<Nat, EventNotification>(backlog, Nat.compare, item.notificationId, item);
             continue proc;
           };
 
@@ -421,6 +444,8 @@ module {
           self.icrc72_handle_notification([item]);
 
           //we go ahead and add the accumultor for confirmations here so that they are confirmed even if the item fails.
+          let relayBlob = Map.get(headerMap, Map.thash, "relay");
+
           let ?#Blob(broadcasterBlob) = Map.get(headerMap, Map.thash, "broadcaster") else {
             debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no broadcaster found" # debug_show(item.headers));
             continue proc;
@@ -428,19 +453,43 @@ module {
 
           debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster found " # debug_show(Principal.fromBlob(broadcasterBlob)));
 
+          let confirmPrincipal = switch(relayBlob){
+            case(?val) {
+              switch(val){
+                case(#Blob(val)){
+                  debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: relay found " # debug_show(Principal.fromBlob(val)));
+                 Principal.fromBlob(val);
+                };
+                case(_) {
+                  debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: invalid relay found" # debug_show(relayBlob));
+                  continue proc;
+                };
+              };
+            };
+            case(null) Principal.fromBlob(broadcasterBlob);
+          };
 
-          let accumulator = switch(BTree.get(state.confirmAccumulator, Principal.compare, Principal.fromBlob(broadcasterBlob))){
+          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster or relay found " # debug_show(confirmPrincipal));
+
+
+          let accumulator = switch(BTree.get(state.confirmAccumulator, Principal.compare, confirmPrincipal)){
             case(null){
-              let newVector = Vector.new<Nat>();
-              ignore BTree.insert(state.confirmAccumulator, Principal.compare, Principal.fromBlob(broadcasterBlob), newVector);
+              debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no accumulator found " # debug_show(confirmPrincipal));
+
+              let newVector = Vector.new<(Nat,Nat)>();
+              ignore BTree.insert(state.confirmAccumulator, Principal.compare, confirmPrincipal, newVector);
               newVector;
             };
             case(?val) {val};
           };
 
-          Vector.add(accumulator, item.id);
+          let cycles = switch(environment.handleNotificationPrice){
+            case(?val) val<system>(state, environment, item);
+            case(null) 0;
+          };
+          Vector.add(accumulator, (item.notificationId, cycles));
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: accumulator " # debug_show(accumulator));
+          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: accumulator used " # debug_show(accumulator, item.notificationId));
           
         };
 
@@ -475,6 +524,7 @@ module {
           };
 
           label continuous while (canProceed){
+            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: backlog in continuous" # debug_show(backlog));
             let thisItem = switch(min){
               case(?val) val;
               case(null) {
@@ -528,7 +578,7 @@ module {
 
     };
 
-    private func drainConfirmations(actionId: TT.ActionId, action: TT.Action) : async* Star.Star<TT.ActionId, TT.Error> {
+    private func drainConfirmations<system>(actionId: TT.ActionId, action: TT.Action) : async* Star.Star<TT.ActionId, TT.Error> {
 
       debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: drainConfirmations " # debug_show(actionId) # " " # debug_show(action));
 
@@ -540,14 +590,28 @@ module {
 
       for(thisItem in proc.vals()){
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator " # debug_show(thisItem));
+        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator item " # debug_show(thisItem));
         let broadcaster : BroadcasterService.Service = actor(Principal.toText(thisItem.0));
-        ignore await broadcaster.icrc72_confirm_notifications(Vector.toArray(thisItem.1));
+
+        var cycles = 0;
+        let list = Buffer.Buffer<Nat>(Vector.size(thisItem.1));
+
+        for(thisEntry in Vector.vals(thisItem.1)){
+          cycles += thisEntry.1;
+          list.add(thisEntry.0);
+        };
+
+        if(cycles > 0){
+          Cycles.add<system>(cycles);
+        };
+
+        //add clycles
+        ignore await broadcaster.icrc72_confirm_notifications(Buffer.toArray(list));
       };
       return #awaited(actionId);
     };
 
-    private func validateBroadcaster(caller: Principal) : async* Bool {
+    public func validateBroadcaster(caller: Principal) : async* Bool {
       debug if(debug_channel.announce) D.print("                    SUBSCRIBER: validateBroadcaster " # debug_show(caller));
       switch(state.validBroadcasters){
         case(#list(val)) {
@@ -758,7 +822,7 @@ module {
           case (#icrc75(item)) #icrc75(item);
         };
 
-        confirmAccumulator = Iter.toArray(Iter.map<(Principal, Vector.Vector<Nat>), (Principal, [Nat])>(BTree.entries(state.confirmAccumulator), func(principal : Principal, vec: Vector.Vector<Nat>):(Principal, [Nat]) {(principal, Vector.toArray(vec))}));
+        confirmAccumulator = Iter.toArray(Iter.map<(Principal, Vector.Vector<(Nat, Nat)>), (Principal, [(Nat,Nat)])>(BTree.entries(state.confirmAccumulator), func(principal : Principal, vec: Vector.Vector<(Nat,Nat)>):(Principal, [(Nat,Nat)]) {(principal, Vector.toArray(vec))}));
 
         confirmTimer = state.confirmTimer;
 

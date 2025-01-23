@@ -75,8 +75,8 @@ module {
 
   public type EmitableEvent = {
     broadcaster: Principal;
-    id : Nat;
-    prevId : ?Nat;
+    eventId : Nat;
+    prevEventId : ?Nat;
     timestamp : Nat;
     namespace : Text;
     source : Principal;
@@ -85,8 +85,8 @@ module {
   };
 
   public type Event = {
-    id : Nat;
-    prevId : ?Nat;
+    eventId : Nat;
+    prevEventId : ?Nat;
     timestamp : Nat;
     namespace : Text;
     source : Principal;
@@ -95,7 +95,7 @@ module {
   };
 
   public type EventNotification = {
-    id : Nat;
+    notificationId : Nat;
     eventId : Nat;
     prevEventId : ?Nat;
     timestamp : Nat;
@@ -149,6 +149,10 @@ module {
         error = "icrc72:publisher:broadcaster:error";
       };
     };
+    subscription = {
+      filter = "icrc72:subscription:filter";
+      skip = "icrc72:subscription:skip";
+    }
 
   };
 
@@ -189,11 +193,12 @@ module {
   };
 
   public type Environment = {
-    addRecord: ?(([(Text, Value)], ?[(Text,Value)]) -> Nat);
-    icrc72OrchestratorCanister : Principal;
+    var addRecord: ?(([(Text, Value)], ?[(Text,Value)]) -> Nat);
+    var icrc72OrchestratorCanister : Principal;
     tt: TT.TimerTool;
-    handleNotificationError: ?(<system>(EventNotification, Error) -> ());
-    handleEventOrder: ?(<system>(State, Environment, Nat, EventNotification) -> Bool);
+    var handleNotificationError: ?(<system>(EventNotification, Error) -> ());
+    var handleEventOrder: ?(<system>(State, Environment, Nat, EventNotification) -> Bool);
+    var handleNotificationPrice: ?(<system>(State, Environment, EventNotification) -> Nat);
   };
 
   public type Stats = {
@@ -204,7 +209,7 @@ module {
       #list : [Principal];
       #icrc75 : ICRC75Item;
     };
-    confirmAccumulator: [(Principal, [Nat])];
+    confirmAccumulator: [(Principal, [(Nat,Nat)])];
     confirmTimer: ?Nat;
     lastEventId: [(Text, [(Nat, Nat)])];
     backlogs: [(Nat, [(Nat, EventNotification)])];
@@ -220,12 +225,12 @@ module {
       #list : Set.Set<Principal>;
       #icrc75 : ICRC75Item;
     };
-    confirmAccumulator: BTree.BTree<Principal, Vector.Vector<Nat>>;
+    confirmAccumulator: BTree.BTree<Principal, Vector.Vector<(Nat, Nat)>>;//notificationId, cycles
     var confirmTimer: ?Nat;
     subscriptions : BTree.BTree<Nat, SubscriptionRecord>;
     subscriptionsByNamespace : BTree.BTree<Text, Nat>;
-    lastEventId : BTree.BTree<Text, BTree.BTree<Nat, Nat>>; //IDUsed, BroadcasterUsed
-    backlogs : BTree.BTree<Nat, BTree.BTree<Nat, EventNotification>>;
+    lastEventId : BTree.BTree<Text, BTree.BTree<Nat, Nat>>; //subscriptionId, eventID //last eventID seen for each subscription
+    backlogs : BTree.BTree<Nat, BTree.BTree<Nat, EventNotification>>;//notificationID, eventNotification
     var readyForSubscription: Bool;
     var error : ?Text;
   };
