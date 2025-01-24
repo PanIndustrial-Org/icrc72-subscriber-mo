@@ -22,6 +22,7 @@ module {
 
   public type Namespace = Text;
 
+
   public type ICRC16Property = {
     name : Text;
     value : ICRC16;
@@ -65,7 +66,9 @@ module {
     #Map : [(Text, Value)];
   };
 
-  public type ICRC16Map = [(Text, ICRC16)];
+  public type ICRC16Map = [ICRC16MapItem];
+
+  public type ICRC16MapItem = (Text, ICRC16);
 
   public type NewEvent = {
     namespace : Text;
@@ -150,8 +153,19 @@ module {
       };
     };
     subscription = {
+
       filter = "icrc72:subscription:filter";
+      filter_update = "icrc72:subscription:filter:update";
+      filter_remove = "icrc72:subscription:filter:remove";
+      bStopped = "icrc72:subscription:bStopped";
       skip = "icrc72:subscription:skip";
+      skip_update = "icrc72:subscription:skip:update";
+      skip_remove = "icrc72:subscription:skip:remove";
+      controllers = {
+        list = "icrc72:subscription:controllers";
+        list_add = "icrc72:subscription:controllers:list:add";
+        list_remove = "icrc72:subscription:controllers:list:remove";
+      };
     }
 
   };
@@ -199,6 +213,7 @@ module {
     var handleNotificationError: ?(<system>(EventNotification, Error) -> ());
     var handleEventOrder: ?(<system>(State, Environment, Nat, EventNotification) -> Bool);
     var handleNotificationPrice: ?(<system>(State, Environment, EventNotification) -> Nat);
+    var onSubscriptionReady: ?(<system>(State, Environment, Text, Nat) -> ());
   };
 
   public type Stats = {

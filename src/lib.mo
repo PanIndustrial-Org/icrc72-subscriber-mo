@@ -42,6 +42,8 @@ module {
   public type ExecutionItem = MigrationTypes.Current.ExecutionItem;
   public type ICRC16 = MigrationTypes.Current.ICRC16;
   public type ICRC16Map = MigrationTypes.Current.ICRC16Map;
+  public type ICRC16Property = MigrationTypes.Current.ICRC16Property;
+  public type ICRC16MapItem = MigrationTypes.Current.ICRC16MapItem;
   public type EventNotification = MigrationTypes.Current.EventNotification;
   public type InitArgs = MigrationTypes.Current.InitArgs;
   public type SubscriptionRecord = MigrationTypes.Current.SubscriptionRecord;
@@ -438,15 +440,15 @@ module {
 
           debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: headerMap " # debug_show(headerMap));
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: calling handle notification " # debug_show(item));
+          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: calling handle notification on self" # debug_show(item));
 
           //todo: may need a limiter here to prevent too many in the outgoing queue.
           self.icrc72_handle_notification([item]);
 
           //we go ahead and add the accumultor for confirmations here so that they are confirmed even if the item fails.
-          let relayBlob = Map.get(headerMap, Map.thash, "relay");
+          let relayBlob = Map.get(headerMap, Map.thash, "icrc72:relay");
 
-          let ?#Blob(broadcasterBlob) = Map.get(headerMap, Map.thash, "broadcaster") else {
+          let ?#Blob(broadcasterBlob) = Map.get(headerMap, Map.thash, "icrc72:broadcaster") else {
             debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no broadcaster found" # debug_show(item.headers));
             continue proc;
           };
@@ -590,7 +592,7 @@ module {
 
       for(thisItem in proc.vals()){
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator item " # debug_show(thisItem));
+        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator item " # debug_show((thisItem, thisItem.1)));
         let broadcaster : BroadcasterService.Service = actor(Principal.toText(thisItem.0));
 
         var cycles = 0;
@@ -685,7 +687,24 @@ module {
               };
             };
 
+            //todo: can be optimized
+            let currentSize = do?{state.broadcasters |>
+              BTree.get(_, Nat.compare, subscriptionId) |>
+              Vector.size(_!)};
+
             fileBroadcaster(principal, subscriptionId, subscriptionNamespace);
+
+             if(currentSize == null or currentSize == ?0){
+              debug if(debug_channel.announce) D.print("                    SUBSCRIBER: about to call subscription ready for" # subscriptionNamespace);
+              switch(environment.onSubscriptionReady){
+                case(?val){
+                  val<system>(state, environment, subscriptionNamespace, subscriptionId);
+                };
+                case(null){};
+              };
+            } else {
+              debug if(debug_channel.announce){ D.print("          SUBSCRIBER: Already has broadcasters")};
+            };
           };  
           
         } else if(data[0].0 == CONST.subscriber.broadcasters.remove){
