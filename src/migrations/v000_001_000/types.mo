@@ -202,6 +202,16 @@ module {
     namespace: Namespace
   };
 
+  public type ICRC85Options = {
+    kill_switch: ?Bool;
+    handler: ?(([(Text, ICRC16Map)]) -> ());
+    period: ?Nat;
+    tree: ?[Text];
+    asset: ?Text;
+    platform: ?Text;
+    collector: ?Principal;
+  };
+
   public type InitArgs ={
     name: Text;
   };
@@ -214,6 +224,10 @@ module {
     var handleEventOrder: ?(<system>(State, Environment, Nat, EventNotification) -> Bool);
     var handleNotificationPrice: ?(<system>(State, Environment, EventNotification) -> Nat);
     var onSubscriptionReady: ?(<system>(State, Environment, Text, Nat) -> ());
+    advanced : ?{
+      icrc85 : ICRC85Options;
+      
+    };
   };
 
   public type Stats = {
@@ -230,6 +244,11 @@ module {
     backlogs: [(Nat, [(Nat, EventNotification)])];
     readyForSubscription: Bool;
     error: ?Text;
+    icrc85: {
+      nextCycleActionId: ?Nat;
+      lastActionReported: ?Nat;
+      activeActions: Nat;
+    };
     tt: TT.Stats;
   };
 
@@ -248,5 +267,10 @@ module {
     backlogs : BTree.BTree<Nat, BTree.BTree<Nat, EventNotification>>;//notificationID, eventNotification
     var readyForSubscription: Bool;
     var error : ?Text;
+    icrc85: {
+      var nextCycleActionId: ?Nat;
+      var lastActionReported: ?Nat;
+      var activeActions: Nat;
+    };
   };
 };

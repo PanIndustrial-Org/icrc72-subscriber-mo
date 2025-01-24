@@ -9,6 +9,7 @@ import Buffer "mo:base/Buffer";
 import Error "mo:base/Error";
 import Cycles "mo:base/ExperimentalCycles";
 
+import Blob "mo:base/Blob";
 import Int "mo:base/Int";
 import Iter "mo:base/Iter";
 import Nat "mo:base/Nat";
@@ -21,7 +22,10 @@ import D "mo:base/Debug";
 import Array "mo:base/Array";
 import ClassPlusLib "../../../../ICDevs/projects/ClassPlus/src/";
 import Conversion = "mo:candy/conversion";
-import Candy = "mo:candy/types"
+import Candy = "mo:candy/types";
+
+import ovsfixed "mo:ovs-fixed";
+import Timer "mo:base/Timer";
 
 module {
 
@@ -183,6 +187,7 @@ module {
     //add new subscription
     public func registerSubscriptions(subscriptions: [SubscriptionRegistration]): async [OrchestrationService.SubscriptionRegisterResult] {
       debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions " # debug_show(subscriptions));
+      
       let result = try{
         await Orchestrator.icrc72_register_subscription(subscriptions);
       } catch(e){
@@ -219,6 +224,7 @@ module {
     private let executionListeners = Map.new<Text, ExecutionItem>();
 
     public func registerExecutionListenerSync(namespace: ?Text, handler: ExecutionHandler) : () {
+        
         debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerExecutionListenerSync " # debug_show(namespace));
         let finalNamespace = switch(namespace){
           case(?val) val;
@@ -258,6 +264,8 @@ module {
 
       debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: icrc72_handle_notification " # debug_show(caller, canister) # " " # debug_show(items, caller));
 
+      state.icrc85.activeActions := state.icrc85.activeActions + items.size();
+
       if(caller == canister and items.size()==1){
 
         debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: self call");
@@ -273,8 +281,6 @@ module {
         };
       
         let namespace = item.namespace;
-        
-        
 
         let handler = if(namespace == ""){
           switch(defaultHandler){
@@ -756,6 +762,8 @@ module {
     public func subscribe(request: SubscribeRequest) : async* [OrchestrationService.SubscriptionRegisterResult] {
       debug if(debug_channel.announce) D.print("                    SUBSCRIBER: subscribe " # debug_show(request.size()));
 
+      await* ensureCycleShare();
+
       for(thisItem in request.vals()){
         switch(thisItem.listener){
           case(#Async(val)) {
@@ -839,6 +847,11 @@ module {
         validBroadcasters = switch(state.validBroadcasters) {
           case (#list(set)) #list(Set.toArray(set));
           case (#icrc75(item)) #icrc75(item);
+        };
+        icrc85 = {
+          nextCycleActionId = state.icrc85.nextCycleActionId;
+          lastActionReported = state.icrc85.lastActionReported;
+          activeActions = state.icrc85.activeActions;
         };
 
         confirmAccumulator = Iter.toArray(Iter.map<(Principal, Vector.Vector<(Nat, Nat)>), (Principal, [(Nat,Nat)])>(BTree.entries(state.confirmAccumulator), func(principal : Principal, vec: Vector.Vector<(Nat,Nat)>):(Principal, [(Nat,Nat)]) {(principal, Vector.toArray(vec))}));
@@ -974,6 +987,104 @@ module {
 
         return Vector.toArray(results);
     };
+
+
+
+
+    ///////////
+    // ICRC85 ovs
+    //////////
+
+    private var _icrc85init = false;
+
+    private func ensureCycleShare<system>() : async*(){
+      if(_icrc85init == true) return;
+      _icrc85init := true;
+
+      ignore Timer.setTimer<system>(#nanoseconds(OneDay), scheduleCycleShare);
+      environment.tt.registerExecutionListenerAsync(?"icrc85:ovs:shareaction:icrc72subscriber", handleIcrc85Action : TT.ExecutionAsyncHandler);
+    };
+
+    private func scheduleCycleShare<system>() : async() {
+      //check to see if it already exists
+      debug if(debug_channel.announce) D.print("in schedule cycle share");
+      switch(state.icrc85.nextCycleActionId){
+        case(?val){
+          switch(Map.get(environment.tt.getState().actionIdIndex, Map.nhash, val)){
+            case(?time) {
+              //already in the queue
+              return;
+            };
+            case(null) {};
+          };
+        };
+        case(null){};
+      };
+
+
+
+      let result = environment.tt.setActionSync<system>(Int.abs(Time.now()), ({actionType = "icrc85:ovs:shareaction:icrc72subscriber"; params = Blob.fromArray([]);}));
+      state.icrc85.nextCycleActionId := ?result.id;
+    };
+
+    private func handleIcrc85Action<system>(id: TT.ActionId, action: TT.Action) : async* Star.Star<TT.ActionId, TT.Error>{
+
+      D.print("in handle timer async " # debug_show((id,action)));
+      switch(action.actionType){
+        case("icrc85:ovs:shareaction:icrc72subscriber"){
+          await* shareCycles<system>();
+          #awaited(id);
+        };
+        case(_) #trappable(id);
+      };
+    };
+
+    private func shareCycles<system>() : async*(){
+      debug if(debug_channel.announce) D.print("in share cycles ");
+      let lastReportId = switch(state.icrc85.lastActionReported){
+        case(?val) val;
+        case(null) 0;
+      };
+
+      debug if(debug_channel.announce) D.print("last report id " # debug_show(lastReportId));
+
+      let actions = if(state.icrc85.activeActions > 0){
+        state.icrc85.activeActions;
+      } else {1;};
+
+      debug if(debug_channel.announce) D.print("actions " # debug_show(actions));
+
+      var cyclesToShare = 1_000_000_000_000; //1 XDR
+
+      if(actions > 0){
+        let additional = Nat.div(actions, 10000);
+        debug if(debug_channel.announce) D.print("additional " # debug_show(additional));
+        cyclesToShare := cyclesToShare + (additional * 1_000_000_000_000);
+        if(cyclesToShare > 100_000_000_000_000) cyclesToShare := 100_000_000_000_000;
+      };
+
+      debug if(debug_channel.announce) D.print("cycles to share" # debug_show(cyclesToShare));
+
+      try{
+        await* ovsfixed.shareCycles<system>({
+          environment = do?{environment.advanced!.icrc85};
+          namespace = "com.panindustrial.libraries.icrc72subscriber";
+          actions = 1;
+          schedule = func <system>(period: Nat) : async* (){
+            let result = environment.tt.setActionSync<system>(Int.abs(Time.now()) + period, {actionType = "icrc85:ovs:shareaction:icrc72subscriber"; params = Blob.fromArray([]);});
+            state.icrc85.nextCycleActionId := ?result.id;
+          };
+          cycles = cyclesToShare;
+        });
+      } catch(e){
+        debug if (debug_channel.announce) D.print("error sharing cycles" # Error.message(e));
+      };
+
+    };
+
+    let OneDay =  86_400_000_000_000;
+
+    
 
   };
 }

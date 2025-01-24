@@ -30,6 +30,11 @@ module {
       var sysSubscription = null;
       var error = null;
       var readyForSubscription = false;
+      icrc85 = {
+        var nextCycleActionId = null;
+        var lastActionReported = null;
+        var activeActions = 0;
+      };
     };
 
     return #v0_1_0(#data(state));
