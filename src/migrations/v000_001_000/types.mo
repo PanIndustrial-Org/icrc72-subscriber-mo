@@ -197,11 +197,11 @@ module {
     registerSubscription : (SubscriptionRegistration) -> async Nat;
   };
 
+
   public type ICRC75Item = {
     principal: Principal;
     namespace: Namespace
   };
-
   public type ICRC85Options = {
     kill_switch: ?Bool;
     handler: ?(([(Text, ICRC16Map)]) -> ());
@@ -250,6 +250,7 @@ module {
       activeActions: Nat;
     };
     tt: TT.Stats;
+    log: [Text];
   };
 
   ///MARK: State

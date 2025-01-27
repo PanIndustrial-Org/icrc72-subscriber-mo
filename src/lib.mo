@@ -149,6 +149,18 @@ module {
       var announce = true;
     };
 
+    public var vecLog = Vector.new<Text>();
+
+    private func d(doLog : Bool, message: Text) {
+      if(doLog){
+        Vector.add(vecLog, Nat.toText(Int.abs(Time.now())) # " " # message);
+        if(Vector.size(vecLog) > 5000){
+          vecLog := Vector.new<Text>();
+        };
+        D.print(message);
+      };
+    };
+
     let environment = switch(environment_passed){
       case(?val) val;
       case(null) {
@@ -186,7 +198,7 @@ module {
 
     //add new subscription
     public func registerSubscriptions(subscriptions: [SubscriptionRegistration]): async [OrchestrationService.SubscriptionRegisterResult] {
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions " # debug_show(subscriptions));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: registerSubscriptions " # debug_show(subscriptions));
       
       let result = try{
         await Orchestrator.icrc72_register_subscription(subscriptions);
@@ -206,18 +218,18 @@ module {
             });
           };
           case(?#Err(val)) {
-            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions error: " # debug_show(val));
+            debug d(debug_channel.announce, "                    SUBSCRIBER: registerSubscriptions error: " # debug_show(val));
             state.error := ?debug_show(val);
             //todo: should we retry?
           };
           case(null){
-            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions error: null");
+            debug d(debug_channel.announce, "                    SUBSCRIBER: registerSubscriptions error: null");
           }
         };
         idx += 1;
       };
 
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerSubscriptions result: " # debug_show(result));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: registerSubscriptions result: " # debug_show(result));
       result;
     };
 
@@ -225,7 +237,7 @@ module {
 
     public func registerExecutionListenerSync(namespace: ?Text, handler: ExecutionHandler) : () {
         
-        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerExecutionListenerSync " # debug_show(namespace));
+        debug d(debug_channel.announce, "                    SUBSCRIBER: registerExecutionListenerSync " # debug_show(namespace));
         let finalNamespace = switch(namespace){
           case(?val) val;
           case(null) "";
@@ -243,7 +255,7 @@ module {
         case(null) "";
       };
 
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: registerExecutionListenerAsync " # debug_show(finalNamespace));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: registerExecutionListenerAsync " # debug_show(finalNamespace));
       ignore Map.put<Text, ExecutionItem>(executionListeners, Map.thash, finalNamespace, #Async(handler) : ExecutionItem);
 
       if(finalNamespace == ""){
@@ -262,18 +274,18 @@ module {
 
       //see https://m7sm4-2iaaa-aaaab-qabra-cai.raw.ic0.app/?tag=1234933381 for an example of why we handle things this way. This allows us to capture traps and provide notifications for errors for each individual trx.
 
-      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: icrc72_handle_notification " # debug_show(caller, canister) # " " # debug_show(items, caller));
+      debug d(debug_channel.handleNotification, "                    SUBSCRIBER: icrc72_handle_notification " # debug_show(caller, canister) # " " # debug_show(items, caller));
 
-      state.icrc85.activeActions := state.icrc85.activeActions + items.size();
+      
 
       if(caller == canister and items.size()==1){
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: self call");
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: self call");
 
         //here we handle the self call with a single item
         let item = items[0];
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: item " # debug_show(item));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: item " # debug_show(item));
 
         let headerMap = switch(item.headers : ?ICRC16Map){
           case(null) Map.new<Text, ICRC16>();
@@ -286,20 +298,20 @@ module {
           switch(defaultHandler){
             case(?val) val;
             case(null) {
-              debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no handler found: " # namespace);
+              debug d(debug_channel.handleNotification, "                    SUBSCRIBER: no handler found: " # namespace);
               return;
             };
           }} else {
             switch(Map.get<Text, ExecutionItem>(executionListeners, Map.thash, namespace)){
             case(?val) val;
             case(null) {
-              debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no handler found: " # namespace);
+              debug d(debug_channel.handleNotification, "                    SUBSCRIBER: no handler found: " # namespace);
               return;
             };
           };
         };
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler found: " # debug_show(namespace));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: handler found: " # debug_show(namespace));
 
         //note: if a non-awaited trap occurs in one of the handlers, these items will not be replayed and they will need to be recovered and replayed. todo: would it make sense to call a self awaiting function here with a future so that they all get queued up with state change?  Would they execute in the same round?
 
@@ -308,22 +320,22 @@ module {
         switch(handler){
           case(#Sync(val)) {
             val<system>(item);
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done no trap sync: " # debug_show(namespace, item.headers));
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: handler done no trap sync: " # debug_show(namespace, item.headers));
           };
           case(#Async(val)) {
             await* val<system>(item);
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done no trap async : " # debug_show(namespace, item.headers));
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: handler done no trap async : " # debug_show(namespace, item.headers));
           };
         };
         } catch(e){
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: error in handler " # Error.message(e) # " " # debug_show(namespace, item));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: error in handler " # Error.message(e) # " " # debug_show(namespace, item));
           switch(environment.handleNotificationError){
             case(?val) val<system>(item, e);
             case(null) {};
           };
         };
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handler done past trap: " # debug_show(namespace, item.headers));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: handler done past trap: " # debug_show(namespace, item.headers));
 
         
 
@@ -331,7 +343,7 @@ module {
         return;
       } else {
 
-        let subscriptionsHandled = Set.new<Nat>();
+        
 
         //todo: check that the broadcaster is valid
         if((await* validateBroadcaster(caller)) == false){
@@ -339,18 +351,22 @@ module {
           return;
         };
 
+        state.icrc85.activeActions := state.icrc85.activeActions + items.size();
+
+        let subscriptionsHandled = Set.new<Nat>();
+
         label proc for(item in items.vals()){
           //we quickly hand these to our self with awaits to be able to trap errors
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: processing item " # debug_show((item, BTree.toArray(state.subscriptionsByNamespace))));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: processing item " # debug_show((item, BTree.toArray(state.subscriptionsByNamespace))));
 
           //find the subscription
           let ?subscriptionId = BTree.get(state.subscriptionsByNamespace, Text.compare, item.namespace) else {
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no subscription found for namespace: " # item.namespace);
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: no subscription found for namespace: " # item.namespace);
             continue proc;
           };
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: subscription found for namespace: " # item.namespace # " " # debug_show(subscriptionId));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: subscription found for namespace: " # item.namespace # " " # debug_show(subscriptionId));
 
           // we add the notification to the block here as it is the first time we confirm that we've seen it and that we have a subscription for it.
           let trxid = switch(environment.addRecord){
@@ -409,7 +425,7 @@ module {
           };
 
           if(canProceed == false){
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: cannot proceed for item " # debug_show(item));
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: cannot proceed for item " # debug_show(item));
             let backlog = switch(BTree.get(state.backlogs, Nat.compare, subscriptionId)){
               case(?val) val;
               case(null) {
@@ -422,7 +438,7 @@ module {
             continue proc;
           };
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: can proceed for item " # debug_show(item));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: can proceed for item " # debug_show(item));
 
           Set.add(subscriptionsHandled, Set.nhash, subscriptionId);
 
@@ -444,9 +460,9 @@ module {
             case(?val) Map.fromIter<Text, ICRC16>(val.vals(), Map.thash);
           };
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: headerMap " # debug_show(headerMap));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: headerMap " # debug_show(headerMap));
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: calling handle notification on self" # debug_show(item));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: calling handle notification on self" # debug_show(item));
 
           //todo: may need a limiter here to prevent too many in the outgoing queue.
           self.icrc72_handle_notification([item]);
@@ -455,21 +471,21 @@ module {
           let relayBlob = Map.get(headerMap, Map.thash, "icrc72:relay");
 
           let ?#Blob(broadcasterBlob) = Map.get(headerMap, Map.thash, "icrc72:broadcaster") else {
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no broadcaster found" # debug_show(item.headers));
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: no broadcaster found" # debug_show(item.headers));
             continue proc;
           };
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster found " # debug_show(Principal.fromBlob(broadcasterBlob)));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: broadcaster found " # debug_show(Principal.fromBlob(broadcasterBlob)));
 
           let confirmPrincipal = switch(relayBlob){
             case(?val) {
               switch(val){
                 case(#Blob(val)){
-                  debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: relay found " # debug_show(Principal.fromBlob(val)));
+                  debug d(debug_channel.handleNotification, "                    SUBSCRIBER: relay found " # debug_show(Principal.fromBlob(val)));
                  Principal.fromBlob(val);
                 };
                 case(_) {
-                  debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: invalid relay found" # debug_show(relayBlob));
+                  debug d(debug_channel.handleNotification, "                    SUBSCRIBER: invalid relay found" # debug_show(relayBlob));
                   continue proc;
                 };
               };
@@ -477,12 +493,12 @@ module {
             case(null) Principal.fromBlob(broadcasterBlob);
           };
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster or relay found " # debug_show(confirmPrincipal));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: broadcaster or relay found " # debug_show(confirmPrincipal));
 
 
           let accumulator = switch(BTree.get(state.confirmAccumulator, Principal.compare, confirmPrincipal)){
             case(null){
-              debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no accumulator found " # debug_show(confirmPrincipal));
+              debug d(debug_channel.handleNotification, "                    SUBSCRIBER: no accumulator found " # debug_show(confirmPrincipal));
 
               let newVector = Vector.new<(Nat,Nat)>();
               ignore BTree.insert(state.confirmAccumulator, Principal.compare, confirmPrincipal, newVector);
@@ -497,20 +513,20 @@ module {
           };
           Vector.add(accumulator, (item.notificationId, cycles));
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: accumulator used " # debug_show(accumulator, item.notificationId));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: accumulator used " # debug_show(accumulator, item.notificationId));
           
         };
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: subscriptionsHandled before await" # debug_show(subscriptionsHandled));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: subscriptionsHandled before await" # debug_show(subscriptionsHandled));
         await secretWait();
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: subscriptionsHandled after await" # debug_show(subscriptionsHandled));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: subscriptionsHandled after await" # debug_show(subscriptionsHandled));
 
         //handle backlogs
         let backlogBuffer = Buffer.Buffer<EventNotification>(1);
         label procSub for(thisSub in Set.keys(subscriptionsHandled)){
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: processing backlog for " # debug_show(thisSub));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: processing backlog for " # debug_show(thisSub));
 
           let backlog = switch(BTree.get(state.backlogs, Nat.compare, thisSub)){
             case(?val) val;
@@ -532,7 +548,7 @@ module {
           };
 
           label continuous while (canProceed){
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: backlog in continuous" # debug_show(backlog));
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: backlog in continuous" # debug_show(backlog));
             let thisItem = switch(min){
               case(?val) val;
               case(null) {
@@ -564,15 +580,15 @@ module {
           };
         };
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: backlogBuffer " # debug_show(backlogBuffer.size()));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: backlogBuffer " # debug_show(backlogBuffer.size()));
 
         if(backlogBuffer.size() > 0){
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: backlogBuffer " # debug_show(backlogBuffer.size()));
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: backlogBuffer " # debug_show(backlogBuffer.size()));
           self.icrc72_handle_notification(Buffer.toArray<EventNotification>(backlogBuffer));
         };
       };
 
-      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: icrc72_handle_notification done setting timer for drain");
+      debug d(debug_channel.handleNotification, "                    SUBSCRIBER: icrc72_handle_notification done setting timer for drain");
 
       if(state.confirmTimer == null){
         state.confirmTimer := do{
@@ -588,17 +604,17 @@ module {
 
     private func drainConfirmations<system>(actionId: TT.ActionId, action: TT.Action) : async* Star.Star<TT.ActionId, TT.Error> {
 
-      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: drainConfirmations " # debug_show(actionId) # " " # debug_show(action));
+      debug d(debug_channel.handleNotification, "                    SUBSCRIBER: drainConfirmations " # debug_show(actionId) # " " # debug_show(action));
 
       let proc = BTree.toArray(state.confirmAccumulator);
       BTree.clear(state.confirmAccumulator);
       state.confirmTimer := null;
 
-      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator " # debug_show(proc));
+      debug d(debug_channel.handleNotification, "                    SUBSCRIBER: confirmAccumulator " # debug_show(proc));
 
       for(thisItem in proc.vals()){
 
-        debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: confirmAccumulator item " # debug_show((thisItem, thisItem.1)));
+        debug d(debug_channel.handleNotification, "                    SUBSCRIBER: confirmAccumulator item " # debug_show((thisItem, thisItem.1)));
         let broadcaster : BroadcasterService.Service = actor(Principal.toText(thisItem.0));
 
         var cycles = 0;
@@ -620,7 +636,7 @@ module {
     };
 
     public func validateBroadcaster(caller: Principal) : async* Bool {
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: validateBroadcaster " # debug_show(caller));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: validateBroadcaster " # debug_show(caller));
       switch(state.validBroadcasters){
         case(#list(val)) {
           return Set.has(val, phash, caller);
@@ -634,7 +650,7 @@ module {
 
     public func fileBroadcaster(broadcaster: Principal, subscriptionId : Nat, namespace: Text){
 
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: fileBroadcaster from subscriber" # debug_show(broadcaster) # " " # debug_show(subscriptionId) # " " # debug_show(namespace));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: fileBroadcaster from subscriber" # debug_show(broadcaster) # " " # debug_show(subscriptionId) # " " # debug_show(namespace));
 
       let broadcasters = switch(BTree.get(state.broadcasters, Nat.compare, subscriptionId)){
           case(null) {
@@ -657,7 +673,7 @@ module {
     //life cycle
     private func handleBroadcasterEvents<system>(notification: EventNotification) : async* (){
 
-      debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: handleBroadcasterEvents " # debug_show(notification));
+      debug d(debug_channel.handleNotification, "                    SUBSCRIBER: handleBroadcasterEvents " # debug_show(notification));
 
       let #Map(data) = notification.data else {
         return;
@@ -669,17 +685,17 @@ module {
           //notification sources should only a valid broadcaster
           if((await* validateBroadcaster(notification.source)) == false){
             //todo: log something
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: invalid broadcaster");
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: invalid broadcaster");
             return;
           };
 
-          debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster validated");
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: broadcaster validated");
 
           let #Array(newData) = thisItem.1 else return;
 
           for(thisAdd in newData.vals()){
 
-            debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster add " # debug_show(thisAdd));
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: broadcaster add " # debug_show(thisAdd));
             let #Array(itemData) = thisAdd else return;
             let #Text(subscriptionNamespace) = itemData[0] else return;
             let #Blob(principalBlob) = itemData[1] else return;
@@ -688,7 +704,7 @@ module {
             let subscriptionId = switch(BTree.get(state.subscriptionsByNamespace, Text.compare, subscriptionNamespace)){
               case(?val) val;
               case(null) {
-                debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: no subscription found for namespace: " # subscriptionNamespace);
+                debug d(debug_channel.handleNotification, "                    SUBSCRIBER: no subscription found for namespace: " # subscriptionNamespace);
                 return;
               };
             };
@@ -701,7 +717,7 @@ module {
             fileBroadcaster(principal, subscriptionId, subscriptionNamespace);
 
              if(currentSize == null or currentSize == ?0){
-              debug if(debug_channel.announce) D.print("                    SUBSCRIBER: about to call subscription ready for" # subscriptionNamespace);
+              debug d(debug_channel.announce, "                    SUBSCRIBER: about to call subscription ready for" # subscriptionNamespace);
               switch(environment.onSubscriptionReady){
                 case(?val){
                   val<system>(state, environment, subscriptionNamespace, subscriptionId);
@@ -709,13 +725,13 @@ module {
                 case(null){};
               };
             } else {
-              debug if(debug_channel.announce){ D.print("          SUBSCRIBER: Already has broadcasters")};
+              debug d(debug_channel.announce, "          SUBSCRIBER: Already has broadcasters");
             };
           };  
           
         } else if(data[0].0 == CONST.subscriber.broadcasters.remove){
           //todo: fix later
-          /* debug if(debug_channel.handleNotification) D.print("                    SUBSCRIBER: broadcaster remove");
+          /* debug d(debug_channel.handleNotification, "                    SUBSCRIBER: broadcaster remove");
           if(notification.source != environment.icrc72OrchestratorCanister){
 
           let #Array(newData) = data[0].1 else return;
@@ -760,7 +776,7 @@ module {
     public type SubscribeRequest = [SubscribeRequestItem];
 
     public func subscribe(request: SubscribeRequest) : async* [OrchestrationService.SubscriptionRegisterResult] {
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: subscribe " # debug_show(request.size()));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: subscribe " # debug_show(request.size()));
 
       await* ensureCycleShare();
 
@@ -785,7 +801,7 @@ module {
         })
       );
 
-      debug if(debug_channel.announce) D.print("                    SUBSCRIBER: subscribe result " # debug_show(result));
+      debug d(debug_channel.announce, "                    SUBSCRIBER: subscribe result " # debug_show(result));
       result;
     };
 
@@ -796,7 +812,7 @@ module {
       
       if(_isInit == true) return;
       _isInit := true;
-      debug if(debug_channel.startup) D.print("                    SUBSCRIBER: initSubscriber");
+      debug d(debug_channel.startup, "                    SUBSCRIBER: initSubscriber");
 
       registerExecutionListenerAsync(?(CONST.subscriber.sys # Principal.toText(canister)), handleBroadcasterEvents);
 
@@ -808,7 +824,7 @@ module {
         memo = null
       }]);
 
-      debug if(debug_channel.startup) D.print("                    SUBSCRIBER: subscriptionResult " # debug_show(subscriptionResult));
+      debug d(debug_channel.startup, "                    SUBSCRIBER: subscriptionResult " # debug_show(subscriptionResult));
 
       //todo: check for valid broadcasters
       let validBroadcasters = try{
@@ -819,7 +835,7 @@ module {
         return;
       };
 
-      debug if(debug_channel.startup) D.print("                    SUBSCRIBER: valid broadcasters " # debug_show(validBroadcasters));
+      debug d(debug_channel.startup, "                    SUBSCRIBER: valid broadcasters " # debug_show(validBroadcasters));
 
       switch(validBroadcasters){
         case(#list(val)) {
@@ -865,6 +881,7 @@ module {
         readyForSubscription = state.readyForSubscription;
         error = state.error;
         tt = environment.tt.getStats();
+        log = Vector.toArray(vecLog);
       };
     };
 
@@ -876,14 +893,14 @@ module {
      */
     public func updateSubscription(updates: [SubscriptionUpdateRequest]) : async* [SubscriptionUpdateResult] {
         // Logging the update request
-        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription called with " # debug_show(updates.size()) # " updates");
+        debug d(debug_channel.announce, "                    SUBSCRIBER: updateSubscription called with " # debug_show(updates.size()) # " updates");
 
         // Attempt to notify the Orchestrator about the updates
         let orchestratorResults: [SubscriptionUpdateResult] = try {
             await Orchestrator.icrc72_update_subscription(updates);
         } catch(err) {
             // Log the error and return failure for all updates
-            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: Failed to notify Orchestrator: " # Error.message(err));
+            debug d(debug_channel.announce, "                    SUBSCRIBER: Failed to notify Orchestrator: " # Error.message(err));
             state.error := ?("Failed to communicate with Orchestrator: " # Error.message(err));
             // Return a list of generic errors corresponding to each update
             return Array.map<SubscriptionUpdateRequest, SubscriptionUpdateResult>(updates, func(_) : SubscriptionUpdateResult {
@@ -896,7 +913,7 @@ module {
 
         let subsUpdated = Set.new<Nat>();
 
-        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription received " # debug_show(updateCount) # " results");
+        debug d(debug_channel.announce, "                    SUBSCRIBER: updateSubscription received " # debug_show(updateCount) # " results");
 
         if(updateCount == 0) {
             // No updates to process
@@ -905,7 +922,7 @@ module {
 
         // Iterate over each update result
         label proc for(idx in Iter.range(0, updateCount-1)) {
-            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription processing result " # debug_show(idx));
+            debug d(debug_channel.announce, "                    SUBSCRIBER: updateSubscription processing result " # debug_show(idx));
             let updateResult = orchestratorResults[idx];
             let updateRequest = updates[idx];
 
@@ -951,18 +968,18 @@ module {
                 };
                 case(?#Err(err)) {
                     // Handle specific error returned from Orchestrator
-                    debug if(debug_channel.announce) D.print("                    SUBSCRIBER: Orchestrator returned error: " # debug_show(err));
+                    debug d(debug_channel.announce, "                    SUBSCRIBER: Orchestrator returned error: " # debug_show(err));
                     Vector.add(results, ?#Err(err));
                 };
                 case(null) {
                     // Handle specific error returned from Orchestrator
-                    debug if(debug_channel.announce) D.print("                    SUBSCRIBER: Orchestrator returned null: ");
+                    debug d(debug_channel.announce, "                    SUBSCRIBER: Orchestrator returned null: ");
                     Vector.add(results, ?#Err(#GenericError { error_code = 0; message = "Orchestrator returned null" }));
                 };
             };
         };
 
-        debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription completed with " # debug_show(Vector.size(results)) # " results");
+        debug d(debug_channel.announce, "                    SUBSCRIBER: updateSubscription completed with " # debug_show(Vector.size(results)) # " results");
 
         label lookup for(thisRecord in Set.keys(subsUpdated)){
           let ?subscription = BTree.get(state.subscriptions, Nat.compare, thisRecord) else continue lookup;
@@ -973,7 +990,7 @@ module {
             filter = ?{slice= [#ByNamespace(subscription.namespace), #BySubscriber(canister)]; statistics = null}});
 
           if(updatedConfig.size() != 1){
-            debug if(debug_channel.announce) D.print("                    SUBSCRIBER: updateSubscription failed to get updated config");
+            debug d(debug_channel.announce, "                    SUBSCRIBER: updateSubscription failed to get updated config");
             continue lookup;
           };
 
@@ -1007,7 +1024,7 @@ module {
 
     private func scheduleCycleShare<system>() : async() {
       //check to see if it already exists
-      debug if(debug_channel.announce) D.print("in schedule cycle share");
+      debug d(debug_channel.announce, "in schedule cycle share");
       switch(state.icrc85.nextCycleActionId){
         case(?val){
           switch(Map.get(environment.tt.getState().actionIdIndex, Map.nhash, val)){
@@ -1040,30 +1057,30 @@ module {
     };
 
     private func shareCycles<system>() : async*(){
-      debug if(debug_channel.announce) D.print("in share cycles ");
+      debug d(debug_channel.announce, "in share cycles ");
       let lastReportId = switch(state.icrc85.lastActionReported){
         case(?val) val;
         case(null) 0;
       };
 
-      debug if(debug_channel.announce) D.print("last report id " # debug_show(lastReportId));
+      debug d(debug_channel.announce, "last report id " # debug_show(lastReportId));
 
       let actions = if(state.icrc85.activeActions > 0){
         state.icrc85.activeActions;
       } else {1;};
 
-      debug if(debug_channel.announce) D.print("actions " # debug_show(actions));
+      debug d(debug_channel.announce, "actions " # debug_show(actions));
 
       var cyclesToShare = 1_000_000_000_000; //1 XDR
 
       if(actions > 0){
         let additional = Nat.div(actions, 10000);
-        debug if(debug_channel.announce) D.print("additional " # debug_show(additional));
+        debug d(debug_channel.announce, "additional " # debug_show(additional));
         cyclesToShare := cyclesToShare + (additional * 1_000_000_000_000);
         if(cyclesToShare > 100_000_000_000_000) cyclesToShare := 100_000_000_000_000;
       };
 
-      debug if(debug_channel.announce) D.print("cycles to share" # debug_show(cyclesToShare));
+      debug d(debug_channel.announce, "cycles to share" # debug_show(cyclesToShare));
 
       try{
         await* ovsfixed.shareCycles<system>({
@@ -1077,7 +1094,7 @@ module {
           cycles = cyclesToShare;
         });
       } catch(e){
-        debug if (debug_channel.announce) D.print("error sharing cycles" # Error.message(e));
+        debug d(debug_channel.announce, "error sharing cycles" # Error.message(e));
       };
 
     };
