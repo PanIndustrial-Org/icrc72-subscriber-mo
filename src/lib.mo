@@ -1,8 +1,8 @@
 import MigrationTypes "migrations/types";
 import MigrationLib "migrations";
 import BTree "mo:stableheapbtreemap/BTree";
-import OrchestrationService "../../icrc72-orchestrator.mo/src/service";
-import BroadcasterService "../../icrc72-broadcaster.mo/src/service";
+import OrchestrationService "./orchestratorService";
+import BroadcasterService "./broadcasterService";
 import Star "mo:star/star";
 
 import Buffer "mo:base/Buffer";
@@ -20,7 +20,8 @@ import Service "service";
 
 import D "mo:base/Debug";
 import Array "mo:base/Array";
-import ClassPlusLib "../../../../ICDevs/projects/ClassPlus/src/";
+//import ClassPlusLib "../../../../ICDevs/projects/ClassPlus/src/";
+import ClassPlusLib "mo:class-plus";
 import Conversion = "mo:candy/conversion";
 import Candy = "mo:candy/types";
 

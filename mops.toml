@@ -9,7 +9,6 @@ vector = "0.4.0"
 ovs-fixed = "0.1.2"
 candy = "0.3.0"
 class-plus = "0.0.1"
-ovs-fixed = "0.1.2"
 
 [package]
 name = "icrc72-subscriber-mo"
