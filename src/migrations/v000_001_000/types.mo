@@ -5,7 +5,7 @@ import VectorLib "mo:vector";
 import BTreeLib "mo:stableheapbtreemap/BTree";
 import SetLib "mo:map/Set";
 import MapLib "mo:map/Map";
-import TTLib "../../../../timerTool/src";
+import TTLib "mo:timer-tool";
 // please do not import any types from your project outside migrations folder here
 // it can lead to bugs when you change those types later, because migration types should not be changed
 // you should also avoid importing these types anywhere in your project directly from here

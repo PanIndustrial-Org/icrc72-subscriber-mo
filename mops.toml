@@ -9,6 +9,7 @@ vector = "0.4.0"
 ovs-fixed = "0.1.2"
 candy = "0.3.0"
 class-plus = "0.0.1"
+timer-tool = "0.1.0"
 
 [package]
 name = "icrc72-subscriber-mo"
