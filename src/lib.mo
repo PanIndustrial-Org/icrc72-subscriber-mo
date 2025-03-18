@@ -82,7 +82,7 @@ module {
     return ("icrc72:subscription:subscribers:allowed:list", #Array([#Blob(Principal.toBlob(item))]));
   };
 
-  public type ClassPlus = ClassPlusLib.ClassPlus<
+  /* public type ClassPlus = ClassPlusLib.ClassPlus<
     Subscriber, 
     State,
     InitArgs,
@@ -90,7 +90,7 @@ module {
 
   public func ClassPlusGetter(item: ?ClassPlus) : () -> Subscriber {
     ClassPlusLib.ClassPlusGetter<Subscriber, State, InitArgs, Environment>(item);
-  };
+  }; */
 
   public func Init<system>(config : {
     manager: ClassPlusLib.ClassPlusInitializationManager;
@@ -285,6 +285,8 @@ module {
 
         //here we handle the self call with a single item
         let item = items[0];
+
+        state.icrc85.activeActions += 1;
 
         debug d(debug_channel.handleNotification, "                    SUBSCRIBER: item " # debug_show(item));
 
@@ -1070,6 +1072,8 @@ module {
         state.icrc85.activeActions;
       } else {1;};
 
+      state.icrc85.activeActions := 0;
+
       debug d(debug_channel.announce, "actions " # debug_show(actions));
 
       var cyclesToShare = 1_000_000_000_000; //1 XDR
@@ -1087,7 +1091,7 @@ module {
         await* ovsfixed.shareCycles<system>({
           environment = do?{environment.advanced!.icrc85};
           namespace = "com.panindustrial.libraries.icrc72subscriber";
-          actions = 1;
+          actions = actions;
           schedule = func <system>(period: Nat) : async* (){
             let result = environment.tt.setActionSync<system>(Int.abs(Time.now()) + period, {actionType = "icrc85:ovs:shareaction:icrc72subscriber"; params = Blob.fromArray([]);});
             state.icrc85.nextCycleActionId := ?result.id;
