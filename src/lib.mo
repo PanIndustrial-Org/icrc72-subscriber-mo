@@ -4,6 +4,7 @@ import BTree "mo:stableheapbtreemap/BTree";
 import OrchestrationService "./orchestratorService";
 import BroadcasterService "./broadcasterService";
 import Star "mo:star/star";
+import ICRC77Service "../../icrc72-orchestrator.mo/src/ICRC77Service";
 
 import Buffer "mo:base/Buffer";
 import Error "mo:base/Error";
@@ -56,6 +57,16 @@ module {
   public type SubscriptionUpdateRequest = OrchestrationService.SubscriptionUpdateRequest;
   public type SubscriptionUpdateResult = OrchestrationService.SubscriptionUpdateResult;
   public type Value = MigrationTypes.Current.Value;
+
+  // ICRC77 Types
+  public type ReplayId = ICRC77Service.ReplayId;
+  public type ReplayRegistration = ICRC77Service.ReplayRegistration;
+  public type ReplayRegisterResult = ICRC77Service.ReplayRegisterResult;
+  public type ReplayRegisterError = ICRC77Service.ReplayRegisterError;
+  public type CancelReplayResult = ICRC77Service.CancelReplayResult;
+  public type CancelReplayError = ICRC77Service.CancelReplayError;
+  public type ReplayStatus = ICRC77Service.ReplayStatus;
+  public type ReplayState = ICRC77Service.ReplayState;
 
 
   public let BTree = MigrationTypes.Current.BTree;
@@ -186,6 +197,8 @@ module {
     var defaultHandler : ?ExecutionItem = null;
 
     public var Orchestrator : OrchestrationService.Service = actor(Principal.toText(environment.icrc72OrchestratorCanister));
+    
+    public var ICRC77Orchestrator : ICRC77Service.Service = actor(Principal.toText(environment.icrc72OrchestratorCanister));
 
     private func natNow(): Nat{Int.abs(Time.now())};
 
@@ -195,6 +208,75 @@ module {
     private func fileSubscription(item: SubscriptionRecord) : () {
       ignore BTree.insert(state.subscriptionsByNamespace, Text.compare, item.namespace, item.id);
       ignore BTree.insert(state.subscriptions, Nat.compare, item.id, item);
+    };
+
+    /**
+     * Check if an event notification is a replay event by examining headers.
+     * Returns the replay ID if this is a replay event, null otherwise.
+     */
+    private func getReplayId(notification: EventNotification) : ?Nat {
+      let ?headers = notification.headers else return null;
+      let headerMap = Map.fromIter<Text, ICRC16>(headers.vals(), Map.thash);
+      
+      switch(Map.get(headerMap, Map.thash, "icrc77:replay")) {
+        case(?#Bool(true)) {
+          // This is a replay event, get the replay ID
+          switch(Map.get(headerMap, Map.thash, "icrc77:replay:id")) {
+            case(?#Nat(replayId)) ?replayId;
+            case(_) null;
+          };
+        };
+        case(_) null;
+      };
+    };
+
+    /**
+     * Check if a replay event indicates completion by examining the end_id header.
+     */
+    private func getReplayEndId(notification: EventNotification) : ?Nat {
+      let ?headers = notification.headers else return null;
+      let headerMap = Map.fromIter<Text, ICRC16>(headers.vals(), Map.thash);
+      
+      switch(Map.get(headerMap, Map.thash, "icrc77:replay:end_id")) {
+        case(?#Nat(endId)) ?endId;
+        case(_) null;
+      };
+    };
+
+    /**
+     * Process replay-specific logic for an event notification.
+     * Updates replay status and handles completion detection.
+     */
+    private func handleReplayEvent<system>(notification: EventNotification, replayId: Nat) : () {
+      debug d(debug_channel.handleNotification, "                    SUBSCRIBER: handling replay event " # debug_show(replayId, notification.eventId));
+      
+      // Update replay status with last event received
+      let currentStatus = switch(BTree.get(state.replayStatus, Nat.compare, replayId)) {
+        case(?status) status;
+        case(null) (0, 0); // (lastEventIdSent, lastNotificationIdSent)
+      };
+      
+      // Simple gap detection - check if we skipped event IDs
+      if(currentStatus.0 > 0 and notification.eventId > currentStatus.0 + 1) {
+        switch(environment.handleReplayGap) {
+          case(?handler) handler<system>(state, environment, replayId, currentStatus.0 + 1, notification.eventId);
+          case(null) {}; // Ignore gaps by default
+        };
+      };
+      
+      let updatedStatus = (notification.eventId, notification.notificationId);
+      ignore BTree.insert(state.replayStatus, Nat.compare, replayId, updatedStatus);
+      
+      // Check if this notification indicates replay completion
+      switch(getReplayEndId(notification)) {
+        case(?endId) {
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay " # debug_show(replayId) # " completed at event " # debug_show(endId));
+          // Replay is complete - could trigger a completion callback here
+        };
+        case(null) {
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay " # debug_show(replayId) # " continuing...");
+        };
+      };
     };
 
     //add new subscription
@@ -351,6 +433,7 @@ module {
         //todo: check that the broadcaster is valid
         if((await* validateBroadcaster(caller)) == false){
           //todo: may need to add an event for notifying of illegal broadcaster and adding it to a block list
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: bad validate broadcaster " # debug_show(caller));
           return;
         };
 
@@ -370,6 +453,33 @@ module {
           };
 
           debug d(debug_channel.handleNotification, "                    SUBSCRIBER: subscription found for namespace: " # item.namespace # " " # debug_show(subscriptionId));
+
+          // Check if this is a replay event and handle accordingly
+          let isReplayEvent = switch(getReplayId(item)) {
+            case(?replayId) {
+              debug d(debug_channel.handleNotification, "                    SUBSCRIBER: processing replay event " # debug_show(replayId));
+              
+              // Simple out-of-band detection - check if we know about this replay
+              switch(BTree.get(state.replays, Nat.compare, replayId)) {
+                case(?_) {
+                  // Known replay - process normally
+                  handleReplayEvent<system>(item, replayId);
+                };
+                case(null) {
+                  // Unknown replay - call handler if available
+                  switch(environment.handleOutOfBandReplay) {
+                    case(?handler) handler<system>(state, environment, item, "Unknown replay ID: " # debug_show(replayId));
+                    case(null) {}; // Ignore by default
+                  };
+                };
+              };
+              true;
+            };
+            case(null) {
+              // Regular event, no special replay handling needed
+              false;
+            };
+          };
 
           // we add the notification to the block here as it is the first time we confirm that we've seen it and that we have a subscription for it.
           let trxid = switch(environment.addRecord){
@@ -411,7 +521,7 @@ module {
               };
               switch(item.filter){
                 case (?filter) {
-                  tx.add(("filter", #Text(filter)));
+                  tx.add(("icrc72:subscription:filter", #Text(filter)));
                 };
                 case (null) {};
               };
@@ -422,9 +532,15 @@ module {
 
 
           //check the order of receipt if desired
-          let canProceed = switch(environment.handleEventOrder){
-            case(?val) val<system>(state, environment, subscriptionId, item);
-            case(null) true;
+          // Replay events bypass normal ordering constraints since they are historical
+          let canProceed = if(isReplayEvent) {
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: bypassing order check for replay event " # debug_show(item.eventId));
+            true;
+          } else {
+            switch(environment.handleEventOrder){
+              case(?val) val<system>(state, environment, subscriptionId, item);
+              case(null) true;
+            };
           };
 
           if(canProceed == false){
@@ -545,9 +661,20 @@ module {
               continue procSub;
             };
           };
-          var canProceed = switch(environment.handleEventOrder){
-            case(?val) val<system>(state, environment, thisSub, testMin.1);
-            case(null) true;
+          // Check if the first item in backlog is a replay event
+          let isBacklogReplayEvent = switch(getReplayId(testMin.1)) {
+            case(?_) true;
+            case(null) false;
+          };
+          
+          var canProceed = if(isBacklogReplayEvent) {
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: bypassing order check for backlog replay event " # debug_show(testMin.1.eventId));
+            true;
+          } else {
+            switch(environment.handleEventOrder){
+              case(?val) val<system>(state, environment, thisSub, testMin.1);
+              case(null) true;
+            };
           };
 
           label continuous while (canProceed){
@@ -567,17 +694,28 @@ module {
               ignore BTree.delete(backlog, Nat.compare, testMin.0);
             };
             
-            
-            canProceed := switch(environment.handleEventOrder){
-              case(?val) val<system>(state, environment, thisSub, testMin.1);
-              case(null) true;
-            };
+            // Check next item for replay event status before checking order
             min := BTree.min(backlog);
-            switch(min){
-              case(?val) {};
+            let nextTestMin = switch(min){
+              case(?val) val;
               case(null) {
                 ignore BTree.delete(state.backlogs, Nat.compare, thisSub);
                 continue procSub;
+              };
+            };
+            
+            let isNextReplayEvent = switch(getReplayId(nextTestMin.1)) {
+              case(?_) true;
+              case(null) false;
+            };
+            
+            canProceed := if(isNextReplayEvent) {
+              debug d(debug_channel.handleNotification, "                    SUBSCRIBER: bypassing order check for next backlog replay event " # debug_show(nextTestMin.1.eventId));
+              true;
+            } else {
+              switch(environment.handleEventOrder){
+                case(?val) val<system>(state, environment, thisSub, nextTestMin.1);
+                case(null) true;
               };
             };
           };
@@ -639,7 +777,7 @@ module {
     };
 
     public func validateBroadcaster(caller: Principal) : async* Bool {
-      debug d(debug_channel.announce, "                    SUBSCRIBER: validateBroadcaster " # debug_show(caller));
+      //debug d(debug_channel.announce, "                    SUBSCRIBER: validateBroadcaster " # debug_show(caller) # " " # debug_show(state.validBroadcasters));
       switch(state.validBroadcasters){
         case(#list(val)) {
           return Set.has(val, phash, caller);
@@ -764,10 +902,56 @@ module {
           }; */
         } else if(data[0].0 == CONST.subscriber.broadcasters.error){
           state.error := ?debug_show(notification);
+        } else if( data[0].0 == CONST.subscriber.replay.add){
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay add");
+          
+          let #Array(newData) = thisItem.1 else return;
+          
+          for(thisReplayAdd in newData.vals()){
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay add item " # debug_show(thisReplayAdd));
+            let #Array(replayData) = thisReplayAdd else return;
+            let #Nat(replayId) = replayData[0] else return;
+            let #Blob(broadcasterBlob) = replayData[1] else return;
+            let broadcasterPrincipal = Principal.fromBlob(broadcasterBlob);
+            
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: updating replay " # debug_show(replayId) # " with broadcaster " # debug_show(broadcasterPrincipal));
+            
+            // Find the existing replay record and update it with the broadcaster
+            let ?existingReplay = BTree.get(state.replays, Nat.compare, replayId) else {
+              debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay not found " # debug_show(replayId));
+              return;
+            };
+            
+            // Update the replay record with the broadcaster principal (second field in tuple)
+            let updatedReplay = (existingReplay.0, ?broadcasterPrincipal, existingReplay.2, existingReplay.3, existingReplay.4);
+            ignore BTree.insert(state.replays, Nat.compare, replayId, updatedReplay);
+            
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay updated successfully " # debug_show(replayId));
+          };
+        } else if( data[0].0 == CONST.subscriber.replay.remove){
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay remove");
+          
+          let #Array(newData) = thisItem.1 else return;
+          
+          for(thisReplayRemove in newData.vals()){
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay remove item " # debug_show(thisReplayRemove));
+            let #Array(replayData) = thisReplayRemove else return;
+            let #Nat(replayId) = replayData[0] else return;
+            
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: removing replay " # debug_show(replayId));
+            
+            // Remove the replay record from state
+            ignore BTree.delete(state.replays, Nat.compare, replayId);
+            ignore BTree.delete(state.replayStatus, Nat.compare, replayId);
+            
+            debug d(debug_channel.handleNotification, "                    SUBSCRIBER: replay removed successfully " # debug_show(replayId));
+          };
+        } else {
+          //unknown command
+          debug d(debug_channel.handleNotification, "                    SUBSCRIBER: unknown command" # debug_show(data[0].0));
         };
-        
-      };
-    };
+      }; // Close the for(thisItem in data.vals()) loop
+    }; // Close the handleBroadcasterEvents function
 
     public type SubscribeRequestItem = {
       namespace : Text;
@@ -808,6 +992,89 @@ module {
       result;
     };
 
+    /**
+     * Request a replay of events for specified namespaces and ranges.
+     * This function registers replay requests with the ICRC77 orchestrator
+     * and records them in the subscriber's state with unassigned broadcasters.
+     *
+     * @param request - Array of replay registrations specifying namespace, range, config, etc.
+     * @returns Array of replay registration results containing replay IDs or errors
+     */
+    public func requestReplay(request: [ReplayRegistration]) : async [ReplayRegisterResult] {
+      debug d(debug_channel.announce, "                    SUBSCRIBER: requestReplay " # debug_show(request.size()));
+
+      await* ensureCycleShare();
+
+      // Validate that the subscriber has subscriptions for the requested namespaces
+      for(thisItem in request.vals()) {
+        switch(BTree.get(state.subscriptionsByNamespace, Text.compare, thisItem.namespace)) {
+          case(null) {
+            debug d(debug_channel.announce, "                    SUBSCRIBER: No subscription found for namespace: " # thisItem.namespace);
+            // We could return an error here, but let the orchestrator handle validation
+          };
+          case(?subscriptionId) {
+            debug d(debug_channel.announce, "                    SUBSCRIBER: Found subscription " # debug_show(subscriptionId) # " for namespace: " # thisItem.namespace);
+          };
+        };
+      };
+
+      let result = try {
+        await ICRC77Orchestrator.icrc77_register_replay(request);
+      } catch(e) {
+        state.error := ?Error.message(e);
+        debug d(debug_channel.announce, "                    SUBSCRIBER: Error requesting replay: " # Error.message(e));
+        return [];
+      };
+
+      // Process results and update state for successful replay registrations
+      var idx = 0;
+      for(thisResult in result.vals()) {
+        switch(thisResult) {
+          case(?#Ok(replayId)) {
+            let requestItem = request[idx];
+            // Record replay in state with unassigned broadcaster (null)
+            // Structure: (namespace, broadcaster, filter, skip, range)
+            let filter = switch(Map.get(Map.fromIter<Text, ICRC16>(requestItem.config.vals(), Map.thash), Map.thash, "icrc72:subscription:filter")) {
+              case(?#Text(filterText)) ?filterText;
+              case(_) null;
+            };
+            
+            let skip = switch(Map.get(Map.fromIter<Text, ICRC16>(requestItem.config.vals(), Map.thash), Map.thash, "icrc72:subscription:skip")) {
+              case(?#Array(skipArray)) {
+                if (skipArray.size() >= 2) {
+                  switch(skipArray[0], skipArray[1]) {
+                    case(#Nat(seed), #Nat(offset)) ?(seed, offset);
+                    case(_, _) null;
+                  };
+                } else null;
+              };
+              case(_) null;
+            };
+
+            ignore BTree.insert(state.replays, Nat.compare, replayId, (
+              requestItem.namespace,
+              null : ?Principal, // Broadcaster will be assigned later via system messages
+              filter,
+              skip,
+              requestItem.range
+            ));
+
+            debug d(debug_channel.announce, "                    SUBSCRIBER: Recorded replay " # debug_show(replayId) # " for namespace: " # requestItem.namespace);
+          };
+          case(?#Err(error)) {
+            debug d(debug_channel.announce, "                    SUBSCRIBER: Replay request failed: " # debug_show(error));
+          };
+          case(null) {
+            debug d(debug_channel.announce, "                    SUBSCRIBER: Null result for replay request");
+          };
+        };
+        idx += 1;
+      };
+
+      debug d(debug_channel.announce, "                    SUBSCRIBER: requestReplay result " # debug_show(result));
+      result;
+    };
+
     var _isInit = false;
 
     //register subscription for the system events
@@ -834,11 +1101,12 @@ module {
         await Orchestrator.icrc72_get_valid_broadcaster();
       } catch(e){
         //how to dea with this?
+        debug d(debug_channel.startup, "                    SUBSCRIBER: error getting valid broadcasters " # Error.message(e));
         state.error := ?Error.message(e);
         return;
       };
 
-      debug d(debug_channel.startup, "                    SUBSCRIBER: valid broadcasters " # debug_show(validBroadcasters));
+      debug d(debug_channel.startup, "                    SUBSCRIBER: valid broadcasters retrieved " # debug_show(validBroadcasters));
 
       switch(validBroadcasters){
         case(#list(val)) {
@@ -880,6 +1148,9 @@ module {
         lastEventId = Iter.toArray(Iter.map<(Text, BTree.BTree<Nat, Nat>), (Text, [(Nat, Nat)])>(BTree.entries(state.lastEventId),func (namespace: Text, btree : BTree.BTree<Nat, Nat>):(Text, [(Nat, Nat)]){(namespace, BTree.toArray(btree))}));
 
         backlogs = Iter.toArray(Iter.map<(Nat, BTree.BTree<Nat, EventNotification>), (Nat, [(Nat, EventNotification)])>(BTree.entries(state.backlogs), func(id: Nat, btree: BTree.BTree<Nat, EventNotification>) : (Nat, [(Nat, EventNotification)]){ (id, BTree.toArray(btree))}));
+
+        replays = BTree.toArray(state.replays);
+        replayStatus = BTree.toArray(state.replayStatus);
 
         readyForSubscription = state.readyForSubscription;
         error = state.error;
@@ -932,42 +1203,22 @@ module {
             switch(updateResult){
                 case(?#Ok(_)) {
                     // Successful update, apply changes to internal state
-                    switch(updateRequest.subscription){
-                        case(#id(subscriptionId)) {
-                            // Update by Subscription ID
-                            let ?sub = BTree.get(state.subscriptions, Nat.compare, subscriptionId) else {
-                                // Subscription not found
-                                Vector.add<SubscriptionUpdateResult>(results, ?#Err(#NotFound));
-                                continue proc;
-                            };
-                            
-                          
-                            Set.add(subsUpdated, Set.nhash, sub.id);
-                               
-                            // Indicate success
-                            Vector.add(results, ?#Ok(true));
-                        };
-                        case(#namespace(ns)) {
-                            // Update by Subscription Namespace
-                            let ?subscriptionId = BTree.get(state.subscriptionsByNamespace, Text.compare, ns) else {
-                                // No subscription with the given namespace
-                                Vector.add(results, ?#Err(((#NotFound))));
-                                continue proc;
-                            };
-                    
-                            let ?sub = BTree.get(state.subscriptions, Nat.compare, subscriptionId) else {
-                                // Subscription not found
-                                Vector.add(results, ?#Err(#NotFound));
-                                continue proc;
-                            };
-                          
-                            Set.add(subsUpdated, Set.nhash, sub.id);
-                                  
-                            // Indicate success
-                            Vector.add(results, ?#Ok(true));
-                               
-                        };
+            
+                    // Update by Subscription ID
+                    let ?sub = BTree.get(state.subscriptions, Nat.compare, updateRequest.subscriptionId) else {
+                        // Subscription not found
+                        Vector.add<SubscriptionUpdateResult>(results, ?#Err(#NotFound));
+                        continue proc;
                     };
+                    
+                  
+                    Set.add(subsUpdated, Set.nhash, sub.id);
+                        
+                    // Indicate success
+                    Vector.add(results, ?#Ok(true));
+              
+                        
+                  
                 };
                 case(?#Err(err)) {
                     // Handle specific error returned from Orchestrator
@@ -1006,6 +1257,83 @@ module {
         };
 
         return Vector.toArray(results);
+    };
+
+    /**
+     * Cancel active replay requests.
+     *
+     * @param replayIds - Array of replay IDs to cancel
+     * @returns Array of cancellation results
+     */
+    public func cancelReplay(replayIds: [Nat]) : async [CancelReplayResult] {
+        debug d(debug_channel.announce, "                    SUBSCRIBER: cancelReplay called for " # debug_show(replayIds));
+
+        let result = try {
+            await ICRC77Orchestrator.icrc77_cancel_replay(replayIds);
+        } catch(e) {
+            state.error := ?Error.message(e);
+            debug d(debug_channel.announce, "                    SUBSCRIBER: Error canceling replay: " # Error.message(e));
+            return [];
+        };
+
+        // Remove canceled replays from local state based on successful cancellations
+        for(thisResult in result.vals()) {
+            switch(thisResult) {
+                case(?#Ok(replayId)) {
+                    ignore BTree.delete(state.replays, Nat.compare, replayId);
+                    ignore BTree.delete(state.replayStatus, Nat.compare, replayId);
+                    debug d(debug_channel.announce, "                    SUBSCRIBER: Removed canceled replay " # debug_show(replayId));
+                };
+                case(?#Err(error)) {
+                    debug d(debug_channel.announce, "                    SUBSCRIBER: Failed to cancel replay: " # debug_show(error));
+                };
+                case(null) {
+                    debug d(debug_channel.announce, "                    SUBSCRIBER: Null result for cancel request");
+                };
+            };
+        };
+
+        debug d(debug_channel.announce, "                    SUBSCRIBER: cancelReplay completed with " # debug_show(result.size()) # " results");
+        result;
+    };
+
+    /**
+     * Get information about active replays.
+     *
+     * @returns Array of replay information including ID, namespace, broadcaster, status, etc.
+     */
+    public func getReplayInfo() : [(Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat), ?(Nat, Nat)))] {
+        debug d(debug_channel.announce, "                    SUBSCRIBER: getReplayInfo called");
+        
+        let replayArray = BTree.toArray(state.replays);
+        let results = Array.map<(Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat))), (Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat), ?(Nat, Nat)))>(
+            replayArray, 
+            func((replayId, replayInfo) : (Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat)))) : (Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat), ?(Nat, Nat))) {
+                let status = BTree.get(state.replayStatus, Nat.compare, replayId);
+                (replayId, (replayInfo.0, replayInfo.1, replayInfo.2, replayInfo.3, replayInfo.4, status))
+            }
+        );
+        
+        debug d(debug_channel.announce, "                    SUBSCRIBER: getReplayInfo returning " # debug_show(results.size()) # " replays");
+        results;
+    };
+
+    /**
+     * Get status of a specific replay by ID.
+     *
+     * @param replayId - The replay ID to query
+     * @returns Optional replay information
+     */
+    public func getReplayById(replayId: Nat) : ?(Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat), ?(Nat, Nat)) {
+        debug d(debug_channel.announce, "                    SUBSCRIBER: getReplayById called for " # debug_show(replayId));
+        
+        switch(BTree.get(state.replays, Nat.compare, replayId)) {
+            case(?replayInfo) {
+                let status = BTree.get(state.replayStatus, Nat.compare, replayId);
+                ?(replayInfo.0, replayInfo.1, replayInfo.2, replayInfo.3, replayInfo.4, status);
+            };
+            case(null) null;
+        };
     };
 
 

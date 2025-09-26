@@ -55,7 +55,7 @@ module {
   public let migration = {
     initialState = #v0_0_0(#data);
     //update your current state version
-    currentStateVersion = #v0_0_1(#id);
+    currentStateVersion = #v0_1_0(#id);
     getMigrationId = getMigrationId;
     migrate = migrate;
   };

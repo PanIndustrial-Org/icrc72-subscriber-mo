@@ -27,9 +27,10 @@ module {
       lastEventId = BTree.init<Text, BTree.BTree<Nat, Nat>>(null); //Namespace, subscription, lastidused
       var confirmTimer = null;
       backlogs = BTree.init<Nat, BTree.BTree<Nat, v0_1_0.EventNotification>>(null);
-      var sysSubscription = null;
       var error = null;
       var readyForSubscription = false;
+      replays = BTree.init<Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat))>(null); //namespace, broadcaster, filter, skip, range,
+      replayStatus = BTree.init<Nat, (Nat, Nat)>(null);
       icrc85 = {
         var nextCycleActionId = null;
         var lastActionReported = null;

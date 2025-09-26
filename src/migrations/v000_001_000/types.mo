@@ -22,6 +22,7 @@ module {
 
   public type Namespace = Text;
 
+  public type ReplayId = Nat;
 
   public type ICRC16Property = {
     name : Text;
@@ -132,6 +133,10 @@ module {
         remove = "icrc72:subscriber:broadcaster:remove";
         error = "icrc72:subscriber:broadcaster:error";
       };
+      replay = {
+        add = "icrc77:subscriber:replay:add";
+        remove = "icrc77:subscriber:replay:remove";
+      };
     };
     broadcasters = {
       subscriber={
@@ -224,6 +229,8 @@ module {
     var handleEventOrder: ?(<system>(State, Environment, Nat, EventNotification) -> Bool);
     var handleNotificationPrice: ?(<system>(State, Environment, EventNotification) -> Nat);
     var onSubscriptionReady: ?(<system>(State, Environment, Text, Nat) -> ());
+    var handleReplayGap: ?(<system>(State, Environment, ReplayId, Nat, Nat) -> ()); // replayId, expected, received
+    var handleOutOfBandReplay: ?(<system>(State, Environment, EventNotification, Text) -> ()); // notification, reason
     advanced : ?{
       icrc85 : ICRC85Options;
       
@@ -242,6 +249,8 @@ module {
     confirmTimer: ?Nat;
     lastEventId: [(Text, [(Nat, Nat)])];
     backlogs: [(Nat, [(Nat, EventNotification)])];
+    replays: [(Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat)))]; // ICRC77 replays
+    replayStatus: [(Nat, (Nat, Nat))]; // ICRC77 replay status tracking
     readyForSubscription: Bool;
     error: ?Text;
     icrc85: {
@@ -264,6 +273,8 @@ module {
     var confirmTimer: ?Nat;
     subscriptions : BTree.BTree<Nat, SubscriptionRecord>;
     subscriptionsByNamespace : BTree.BTree<Text, Nat>;
+    replays : BTree.BTree<Nat, (Text, ?Principal, ?Text, ?(Nat, Nat), (Nat, ?Nat))>; //namespace, broadcaster, filter, skip, range,
+    replayStatus: BTree.BTree<Nat, (Nat, Nat)>; //replayId, (lastEventIdSent, lastNotificationIdSent)
     lastEventId : BTree.BTree<Text, BTree.BTree<Nat, Nat>>; //subscriptionId, eventID //last eventID seen for each subscription
     backlogs : BTree.BTree<Nat, BTree.BTree<Nat, EventNotification>>;//notificationID, eventNotification
     var readyForSubscription: Bool;

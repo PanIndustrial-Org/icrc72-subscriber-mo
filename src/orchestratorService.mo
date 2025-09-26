@@ -77,18 +77,9 @@ module {
     memo: ?Blob;
   };
 
-  public type PublicationIdentifier = {
-    #namespace: Text;
-    #publicationId: Nat;
-  };
-
-  public type SubscriptionIdentifier = {
-    #namespace: Text;
-    #subscriptionId: Nat;
-  };
 
   public type PublicationUpdateRequest = {
-    publication : PublicationIdentifier;
+    publicationId : Nat;
     config : (Text, ICRC16);
     memo: ?Blob;
   };
@@ -128,11 +119,8 @@ module {
   };
 
   public type SubscriptionUpdateRequest = {
-    subscription : {
-      #namespace: Text;
-      #id: Nat;
-    };
-    subscriber: ?Principal;
+    subscriptionId : Nat;
+    subscriber: ?Principal; //Identifier of the subscriber relevant for this. Defaults to caller if not provided.
     config : (Text, ICRC16);
     memo: ?Blob;
   };
@@ -164,22 +152,7 @@ module {
       publisher: Principal;
       stats: Stats;
     };
-
-    //broken down by namespace
-    public type PublisherPublicationInfo = {
-      publisher: Principal;
-      namespace: Text;
-      publicationId: Nat;
-      config: ICRC16Map;
-      stats: Stats;
-    };
-
-  public type SubscriberSubscriptionInfo = {
-    subscriptionId : Nat;
-    subscriber: Principal;
-    config: ICRC16Map;
-    stats: Stats;
-  };
+    
   public type SubscriptionInfo = {
     subscriptionId: Nat;
     namespace: Text;
@@ -190,7 +163,6 @@ module {
   public type SubscriberInfo = {
     subscriber: Principal;
     config: ICRC16Map;
-    subscriptions: ?[Nat];
     stats: Stats;
   };
 
@@ -225,12 +197,12 @@ module {
 
   public type PublicationDeleteRequest = {
     memo: ?Blob;
-    publication: PublicationIdentifier;
+    publicationId: Nat;
   };
 
   public type SubscriptionDeleteRequest = {
     memo: ?Blob;
-    subscription: SubscriptionIdentifier;
+    subscriptionId: Nat;
     subscriber: ?Principal;
   };
 
@@ -241,7 +213,7 @@ module {
 
   public type SubscriptionDelete = {
     memo: Blob;
-    subscription: SubscriptionIdentifier;
+    subscriptionId: Nat;
   };
 
   public type SubscriptionDeleteResult = ?{
@@ -380,25 +352,46 @@ module {
     }
   };
 
+  public type GetBroadcastersRequest = {
+    take: ?Nat;
+    prev: ?Principal;
+    filter: ?OrchestrationFilter;
+  };
+
+  public type GetPublishersRequest = {
+    take: ?Nat;
+    prev: ?Principal;
+    filter: ?OrchestrationFilter;
+  };
+
+  public type GetSubscribersRequest = {
+    take: ?Nat;
+    prev: ?Principal;
+    filter: ?OrchestrationFilter;
+  };
+
+  public type GetSubscriptionsRequest = {
+    take: ?Nat;
+    prev: ?Nat;
+    filter: ?OrchestrationFilter;
+  };
+
+  public type GetPublicationsRequest = {
+    take: ?Nat;
+    prev: ?Nat;
+    filter: ?OrchestrationFilter;
+  };
+
+
   public type Service = actor {
     icrc72_register_subscription: ([SubscriptionRegistration]) -> async [SubscriptionRegisterResult];
     icrc72_register_publication: ([PublicationRegistration]) -> async [PublicationRegisterResult];
     icrc72_get_valid_broadcaster: () -> async ValidBroadcastersResponse;
-    icrc72_get_publications: ({
-      take: ?Nat;
-      prev: ?Nat;
-      filter: ?OrchestrationFilter;
-    }) -> async [PublicationInfo];
-    icrc72_get_subscriptions: ({
-      take: ?Nat;
-      prev: ?Nat;
-      filter: ?OrchestrationFilter;
-    }) -> async [SubscriptionInfo];
-    icrc72_get_subscribers: ({
-      take: ?Nat;
-      prev: ?Nat;
-      filter: ?OrchestrationFilter;
-    }) -> async [SubscriberInfo];
+    icrc72_get_publications: (GetPublicationsRequest) -> async [PublicationInfo];
+    icrc72_get_subscriptions: (GetSubscriptionsRequest) -> async [SubscriptionInfo];
+    icrc72_get_subscribers: (GetSubscribersRequest) -> async [SubscriberInfo];
+    icrc72_get_publishers: (GetPublishersRequest) -> async [PublisherInfo];
+    icrc72_get_broadcasters: (GetBroadcastersRequest) -> async [BroadcasterInfo];
     icrc72_update_publication: ([PublicationUpdateRequest]) -> async [PublicationUpdateResult];
     icrc72_update_subscription: ([SubscriptionUpdateRequest]) -> async [SubscriptionUpdateResult];
     icrc72_delete_publication: ([PublicationDeleteRequest]) -> async [PublicationDeleteResult];
