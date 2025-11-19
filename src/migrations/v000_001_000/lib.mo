@@ -11,9 +11,9 @@ module {
   public let Map = v0_1_0.Map;
   public type EmitableEvent = v0_1_0.EmitableEvent;
 
-  public func upgrade(prevmigration_state: MigrationTypes.State, args: MigrationTypes.Args, caller: Principal): MigrationTypes.State {
+  public func upgrade(_prevmigration_state: MigrationTypes.State, args: MigrationTypes.Args, _caller: Principal): MigrationTypes.State {
 
-    let (name) = switch (args) {
+    let (_name) = switch (args) {
       case (?args) {(args.name)};
       case (_) {("nobody")};
     };

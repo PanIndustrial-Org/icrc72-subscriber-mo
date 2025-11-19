@@ -114,7 +114,7 @@ module {
 
     D.print("Subscriber Init");
     switch(config.pullEnvironment){
-      case(?val) {
+      case(?_val) {
         D.print("pull environment has value");
         
       };
@@ -130,7 +130,7 @@ module {
   };
 
   public func ReflectWithMaxStrategy(key: Text, max: Nat) : (<system>(state: CurrentState, environment: Environment, eventNotificication: EventNotification) -> Nat){
-    let strategy = func <system>(state: CurrentState, environment: Environment, eventNotificication: EventNotification) : Nat {
+    let strategy = func <system>(_state: CurrentState, _environment: Environment, eventNotificication: EventNotification) : Nat {
       let useMax = max;
       let headers : ICRC16Map = switch(eventNotificication.headers){
         case(?val){val};
@@ -153,7 +153,7 @@ module {
   };
 
 
-  public class Subscriber(stored: ?State, caller: Principal, canister: Principal, args: ?InitArgs, environment_passed: ?Environment, storageChanged: (State) -> ()){
+  public class Subscriber(stored: ?State, _caller: Principal, canister: Principal, args: ?InitArgs, environment_passed: ?Environment, storageChanged: (State) -> ()){
 
     public let debug_channel = {
       var handleNotification = true;
@@ -372,7 +372,7 @@ module {
 
         debug d(debug_channel.handleNotification, "                    SUBSCRIBER: item " # debug_show(item));
 
-        let headerMap = switch(item.headers : ?ICRC16Map){
+        let _headerMap = switch(item.headers : ?ICRC16Map){
           case(null) Map.new<Text, ICRC16>();
           case(?val) Map.fromIter<Text, ICRC16>(val.vals(), Map.thash);
         };
@@ -482,7 +482,7 @@ module {
           };
 
           // we add the notification to the block here as it is the first time we confirm that we've seen it and that we have a subscription for it.
-          let trxid = switch(environment.addRecord){
+          let _trxid = switch(environment.addRecord){
             case (?addRecord) {
               //todo: calculate value of blocks
               let txtop = Buffer.fromIter<(Text, Value)>([("btype",#Text("72Notification")),("ts", #Nat(natNow()))].vals());
@@ -782,7 +782,7 @@ module {
         case(#list(val)) {
           return Set.has(val, phash, caller);
         };
-        case(#icrc75(val)) {
+        case(#icrc75(_val)) {
           //todo: implement icrc75
           return false;
         };
@@ -803,7 +803,7 @@ module {
         };
 
         switch(Vector.indexOf<Principal>(broadcaster, broadcasters, Principal.equal)){
-          case(?val) {};
+          case(?_val) {};
           case(null) {
             Vector.add(broadcasters, broadcaster);
           };
@@ -1359,7 +1359,7 @@ module {
       switch(state.icrc85.nextCycleActionId){
         case(?val){
           switch(Map.get(environment.tt.getState().actionIdIndex, Map.nhash, val)){
-            case(?time) {
+            case(?_time) {
               //already in the queue
               return;
             };
